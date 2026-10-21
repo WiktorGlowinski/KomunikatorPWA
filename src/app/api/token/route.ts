@@ -8,12 +8,16 @@ export async function GET(req: NextRequest) {
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
   const wsUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   // Wypisujemy w konsoli terminala stan zmiennych
   console.log('--- DIAGNOSTYKA ENV ---');
   console.log('LIVEKIT_API_KEY:', apiKey ? 'WIDOCZNY' : 'BRAK (undefined)');
   console.log('LIVEKIT_API_SECRET:', apiSecret ? 'WIDOCZNY' : 'BRAK (undefined)');
   console.log('NEXT_PUBLIC_LIVEKIT_URL:', wsUrl ? 'WIDOCZNY' : 'BRAK (undefined)');
+  console.log('NEXT_PUBLIC_SUPABASE_URL:', supabaseUrl ? 'WIDOCZNY' : 'BRAK (undefined)');
+  console.log('NEXT_PUBLIC_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'WIDOCZNY' : 'BRAK (undefined)');
 
   if (!apiKey || !apiSecret || !wsUrl) {
     return NextResponse.json(
@@ -23,6 +27,8 @@ export async function GET(req: NextRequest) {
           LIVEKIT_API_KEY: apiKey ? 'OK' : 'BRAK',
           LIVEKIT_API_SECRET: apiSecret ? 'OK' : 'BRAK',
           NEXT_PUBLIC_LIVEKIT_URL: wsUrl ? 'OK' : 'BRAK',
+          NEXT_PUBLIC_SUPABASE_URL: supabaseUrl ? 'OK' : 'BRAK',
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: supabaseAnonKey ? 'OK' : 'BRAK',
         },
       },
       { status: 500 }
