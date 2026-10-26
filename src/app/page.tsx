@@ -2,14 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { supabase } from '@/lib/supabaseClient';
 
 export default function HomePage() {
   const router = useRouter();
-  const [roomName, setRoomName] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState('');
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -25,122 +24,109 @@ export default function HomePage() {
           setUsername(profile.username);
         }
       }
-      setLoading(false);
     };
     checkSession();
   }, []);
 
-  const handleJoinRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanRoom = roomName.trim().toLowerCase().replace(/\s+/g, '-');
-    if (!cleanRoom) return;
-    router.push(`/room/${cleanRoom}`);
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono text-xs">
-        Inicjalizacja sesji...
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col justify-between selection:bg-zinc-800">
-      {/* Pasek nawigacji technicznej */}
-      <header className="border-b border-zinc-800/80 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-mono text-xs tracking-wider text-zinc-300">
-            WEBRTC-SYSTEM // UKW
-          </span>
+    <div className="relative min-h-screen bg-[#030712] text-slate-100 flex flex-col justify-between overflow-hidden select-none selection:bg-slate-800">
+      
+   
+      <div 
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: 'radial-gradient(circle at 50% 45%, #0B1930 0%, #030712 70%)'
+        }}
+      />
+
+   
+      <div className="pointer-events-none absolute inset-0 overflow-hidden font-mono uppercase tracking-widest font-bold select-none">
+        <span className="absolute top-[12%] left-[5%] md:left-[8%] text-2xl sm:text-4xl md:text-5xl text-[#1e293b]/50 animate-drift-1">
+          Bezpieczeństwo
+        </span>
+        <span className="absolute top-[22%] right-[5%] md:right-[8%] text-2xl sm:text-4xl md:text-5xl text-[#1e293b]/50 animate-drift-2">
+          Prywatność
+        </span>
+        <span className="absolute bottom-[24%] left-[6%] md:left-[10%] text-2xl sm:text-4xl md:text-5xl text-[#1e293b]/50 animate-drift-3">
+          Wolność słowa
+        </span>
+        <span className="absolute bottom-[14%] right-[6%] md:right-[10%] text-2xl sm:text-4xl md:text-5xl text-[#1e293b]/50 animate-drift-4">
+          Swoboda
+        </span>
+      </div>
+
+      
+      <main className="relative z-10 max-w-xl mx-auto px-6 py-16 flex-1 flex flex-col justify-center items-center text-center">
+        
+     
+        <div className="mb-8 flex justify-center">
+          <Image
+            src="/logo.png"
+            alt="Logo"
+            width={96}
+            height={96}
+            priority
+            className="h-20 sm:h-24 w-auto object-contain opacity-95 transition-opacity hover:opacity-100"
+            onError={(e) => {
+              (e.target as HTMLElement).style.display = 'none';
+            }}
+          />
         </div>
 
-        <div>
-          {isLoggedIn ? (
-            <div className="flex items-center gap-4">
-              <span className="text-xs text-zinc-400 font-mono">
-                Użytkownik: <span className="text-zinc-200">{username || 'Aktywny'}</span>
-              </span>
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-zinc-200 transition"
-              >
-                Panel sal
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => router.push('/login')}
-              className="px-3 py-1.5 rounded border border-zinc-800 hover:bg-zinc-900 text-xs font-mono text-zinc-300 transition"
-            >
-              Logowanie do systemu
-            </button>
-          )}
-        </div>
-      </header>
+        <h1 className="text-3xl sm:text-5xl font-semibold tracking-tight text-white mb-6 leading-tight">
+          Prosty system rozmów <br />
+          minimum danych, maksimum prywatności
+        </h1>
 
-      {/* Główny blok operacyjny */}
-      <main className="max-w-lg w-full mx-auto px-6 py-12 flex-1 flex flex-col justify-center">
-        <div className="border border-zinc-800 bg-zinc-900/50 rounded-xl p-8 backdrop-blur-sm shadow-xl">
-          <div className="mb-6">
-            <h1 className="text-lg font-semibold tracking-tight text-white mb-1">
-              Dołączenie do wideokonferencji
-            </h1>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              Wprowadź identyfikator pokoju, aby nawiązać bezpośrednie połączenie z serwerem SFU. Zarządzanie uprawnieniami moderatorskimi i historią wymaga uwierzytelnienia.
-            </p>
-          </div>
+        <p className="text-slate-400 text-xs sm:text-sm max-w-md mb-10 leading-relaxed font-sans">
+          Aplikacja nie przechowuje informacji o użytkowniku i nie weryfikuje czatu. Obraz oraz dźwięk istnieją wyłącznie w pamięci operacyjnej podczas trwania połączenia.
+        </p>
 
-          <form onSubmit={handleJoinRoom} className="space-y-4">
-            <div>
-              <label className="block text-[11px] font-mono uppercase text-zinc-400 mb-1.5">
-                Identyfikator sali
-              </label>
-              <input
-                type="text"
-                required
-                value={roomName}
-                onChange={(e) => setRoomName(e.target.value)}
-                placeholder="np. sala-projektowa-1"
-                className="w-full px-3.5 py-2.5 rounded bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 font-mono focus:outline-none focus:border-zinc-500 transition"
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 rounded bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-mono font-semibold uppercase tracking-wider transition"
-            >
-              Nawiąż połączenie WebRTC
-            </button>
-          </form>
-
-          <div className="mt-8 pt-6 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-400 font-mono">
-            <span>Status: {isLoggedIn ? 'Autoryzowany' : 'Gość'}</span>
-            {isLoggedIn ? (
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="text-zinc-300 hover:text-white transition"
-              >
-                Przejdź do bazy sal →
-              </button>
-            ) : (
-              <button
-                onClick={() => router.push('/login')}
-                className="text-zinc-300 hover:text-white transition"
-              >
-                Logowanie / Rejestracja →
-              </button>
-            )}
-          </div>
-        </div>
+        <button
+          onClick={() => router.push(isLoggedIn ? '/dashboard' : '/login')}
+          className="px-8 py-3 rounded bg-white hover:bg-slate-200 text-[#030712] font-mono text-xs uppercase tracking-wider font-semibold transition"
+        >
+          {isLoggedIn ? 'Przejdź do panelu' : 'Zaloguj się'}
+        </button>
       </main>
 
-      {/* Stopka inżynierska */}
-      <footer className="border-t border-zinc-900 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-zinc-500 font-mono">
-        <span>Uniwersytet Kazimierza Wielkiego w Bydgoszczy</span>
-        <span>Architektura: WebRTC SFU // PostgreSQL RLS</span>
+  
+      <footer className="relative z-10 py-6 text-center text-[11px] font-mono text-slate-600 border-t border-slate-900/40">
+        Prywatna przestrzeń wymiany myśli
       </footer>
+
+
+      <style jsx>{`
+        @keyframes drift1 {
+          0%, 100% { transform: translate(0px, 0px) rotate(0deg); }
+          25% { transform: translate(30px, -40px) rotate(2deg); }
+          50% { transform: translate(-25px, -20px) rotate(-1deg); }
+          75% { transform: translate(15px, 25px) rotate(1deg); }
+        }
+        @keyframes drift2 {
+          0%, 100% { transform: translate(0px, 0px) rotate(0deg); }
+          25% { transform: translate(-35px, 35px) rotate(-2deg); }
+          50% { transform: translate(20px, 45px) rotate(1deg); }
+          75% { transform: translate(-20px, -20px) rotate(-1deg); }
+        }
+        @keyframes drift3 {
+          0%, 100% { transform: translate(0px, 0px) rotate(0deg); }
+          25% { transform: translate(40px, 30px) rotate(2deg); }
+          50% { transform: translate(-30px, 40px) rotate(-2deg); }
+          75% { transform: translate(-15px, -35px) rotate(1deg); }
+        }
+        @keyframes drift4 {
+          0%, 100% { transform: translate(0px, 0px) rotate(0deg); }
+          25% { transform: translate(-40px, -35px) rotate(-2deg); }
+          50% { transform: translate(35px, -25px) rotate(2deg); }
+          75% { transform: translate(20px, 30px) rotate(-1deg); }
+        }
+
+        .animate-drift-1 { animation: drift1 8s ease-in-out infinite; }
+        .animate-drift-2 { animation: drift2 9s ease-in-out infinite; }
+        .animate-drift-3 { animation: drift3 10s ease-in-out infinite; }
+        .animate-drift-4 { animation: drift4 8.5s ease-in-out infinite; }
+      `}</style>
     </div>
   );
 }
