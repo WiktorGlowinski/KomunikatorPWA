@@ -16,7 +16,6 @@ export default function RoomPage() {
 
   useEffect(() => {
     (async () => {
-      // 1. Sprawdzamy czy użytkownik jest zalogowany
       const { data: { user } } = await supabase.auth.getUser();
 
       if (!user) {
@@ -24,7 +23,7 @@ export default function RoomPage() {
         return;
       }
 
-      // 2. Pobieramy jego nick z tabeli profiles
+     
       const { data: profile } = await supabase
         .from('profiles')
         .select('username')
@@ -34,7 +33,7 @@ export default function RoomPage() {
       const nick = profile?.username || user.email?.split('@')[0] || 'Uczestnik';
       setUsername(nick);
 
-      // 3. Pobieramy token LiveKit dla konkretnego pokoju
+    
       try {
         const resp = await fetch(`/api/token?room=${roomId}&username=${nick}`);
         const data = await resp.json();
