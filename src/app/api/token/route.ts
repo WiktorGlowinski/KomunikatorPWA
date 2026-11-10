@@ -11,7 +11,6 @@ export async function GET(req: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  
   console.log('--- DIAGNOSTYKA ENV ---');
   console.log('LIVEKIT_API_KEY:', apiKey ? 'WIDOCZNY' : 'BRAK (undefined)');
   console.log('LIVEKIT_API_SECRET:', apiSecret ? 'WIDOCZNY' : 'BRAK (undefined)');
