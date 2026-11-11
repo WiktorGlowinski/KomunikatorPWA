@@ -297,91 +297,68 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
 
     const interval = setInterval(async () => {
       try {
-        const engine = (room as any).engine;
-        if (!engine) return;
-
-        const lp = room.localParticipant;
-        let hasActiveAudio = lp ? lp.isMicrophoneEnabled : false;
-        let hasActiveVideo = lp ? (lp.isCameraEnabled || lp.isScreenShareEnabled) : false;
-
-        const signalRtt = typeof engine.rtt === 'number' && engine.rtt > 0 
-          ? Math.round(engine.rtt) 
-          : typeof engine.client?.rtt === 'number' && engine.client.rtt > 0 
-          ? Math.round(engine.client.rtt) 
-          : null;
-
-        const pcsSet = new Set<RTCPeerConnection>();
-        if (engine.publisher?.pc) pcsSet.add(engine.publisher.pc);
-        if (engine.publisher?.peerConnection) pcsSet.add(engine.publisher.peerConnection);
-        if (engine.subscriber?.pc) pcsSet.add(engine.subscriber.pc);
-        if (engine.subscriber?.peerConnection) pcsSet.add(engine.subscriber.peerConnection);
-        const pcs = Array.from(pcsSet);
-
-        let currentRtt: number | null = signalRtt;
-        let currentJitter: number | null = null;
-        let packetsLostTotal = 0;
-        let packetsRecvTotal = 0;
         let totalBytesSent = 0;
         let totalBytesRecv = 0;
+        let packetsLostTotal = 0;
+        let packetsRecvTotal = 0;
+        let currentRtt: number | null = null;
+        let currentJitter: number | null = null;
         let resStr: string | null = null;
         let currentFps: number | null = null;
         let aCodec: string | null = null;
         let vCodec: string | null = null;
 
-        if (lp) {
-          lp.videoTrackPublications.forEach((pub) => {
-            if (pub.track && pub.track.mediaStreamTrack) {
-              hasActiveVideo = true;
-              const settings = pub.track.mediaStreamTrack.getSettings();
-              if (settings.width && settings.height) {
-                resStr = `${settings.width}x${settings.height}`;
-              }
-              if (settings.frameRate) {
-                currentFps = Math.round(settings.frameRate);
-              }
-            }
-          });
+        const engine = (room as any).engine;
+        if (engine) {
+          if (typeof engine.rtt === 'number' && engine.rtt > 0) {
+            currentRtt = Math.round(engine.rtt);
+          } else if (typeof engine.client?.rtt === 'number' && engine.client.rtt > 0) {
+            currentRtt = Math.round(engine.client.rtt);
+          }
         }
 
-        for (const pc of pcs) {
-          if (!pc || typeof pc.getStats !== 'function') continue;
+        const pcsSet = new Set<RTCPeerConnection>();
+        if (engine?.publisher?.pc) pcsSet.add(engine.publisher.pc);
+        if (engine?.publisher?.peerConnection) pcsSet.add(engine.publisher.peerConnection);
+        if (engine?.subscriber?.pc) pcsSet.add(engine.subscriber.pc);
+        if (engine?.subscriber?.peerConnection) pcsSet.add(engine.subscriber.peerConnection);
 
-          let stats: RTCStatsReport;
-          try {
-            stats = await pc.getStats();
-          } catch {
-            continue;
+        const reports: RTCStatsReport[] = [];
+
+        for (const pc of pcsSet) {
+          if (pc && typeof pc.getStats === 'function') {
+            try {
+              const s = await pc.getStats();
+              reports.push(s);
+            } catch {}
           }
+        }
 
+        const allTrackPubs = [
+          ...Array.from(room.localParticipant.trackPublications.values()),
+          ...Array.from(room.remoteParticipants.values()).flatMap((p) =>
+            Array.from(p.trackPublications.values())
+          ),
+        ];
+
+        for (const pub of allTrackPubs) {
+          if (pub.track && typeof (pub.track as any).getRTCStatsReport === 'function') {
+            try {
+              const rep = await (pub.track as any).getRTCStatsReport();
+              if (rep) reports.push(rep);
+            } catch {}
+          }
+        }
+
+        for (const stats of reports) {
           stats.forEach((report) => {
-            if (report.type === 'candidate-pair') {
-              if (typeof report.currentRoundTripTime === 'number' && report.currentRoundTripTime > 0) {
-                currentRtt = Math.round(report.currentRoundTripTime * 1000);
-              }
-            }
-
-            if (report.type === 'remote-inbound-rtp') {
-              if (typeof report.roundTripTime === 'number' && report.roundTripTime > 0) {
-                currentRtt = Math.round(report.roundTripTime * 1000);
-              }
-              if (typeof report.jitter === 'number') {
-                currentJitter = Math.round(report.jitter * 1000);
-              }
-              if (typeof report.packetsLost === 'number') {
-                packetsLostTotal += report.packetsLost;
-              }
-            }
-
             if (report.type === 'outbound-rtp') {
               if (typeof report.bytesSent === 'number') {
                 totalBytesSent += report.bytesSent;
               }
               const w = report.frameWidth || report.width;
               const h = report.frameHeight || report.height;
-              if (w && h) {
-                resStr = `${w}x${h}`;
-                hasActiveVideo = true;
-              }
+              if (w && h) resStr = `${w}x${h}`;
               if (typeof report.framesPerSecond === 'number' && report.framesPerSecond > 0) {
                 currentFps = Math.round(report.framesPerSecond);
               }
@@ -402,20 +379,34 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
               }
               const w = report.frameWidth || report.width;
               const h = report.frameHeight || report.height;
-              if (w && h) {
-                resStr = `${w}x${h}`;
-                hasActiveVideo = true;
-              }
+              if (w && h) resStr = `${w}x${h}`;
               if (typeof report.framesPerSecond === 'number' && report.framesPerSecond > 0) {
                 currentFps = Math.round(report.framesPerSecond);
               }
             }
 
-            if (report.type === 'media-source' && report.kind === 'video') {
-              if (report.width && report.height) {
-                resStr = `${report.width}x${report.height}`;
-                hasActiveVideo = true;
+            if (report.type === 'remote-inbound-rtp') {
+              if (typeof report.roundTripTime === 'number' && report.roundTripTime > 0) {
+                currentRtt = Math.round(report.roundTripTime * 1000);
               }
+              if (typeof report.jitter === 'number') {
+                currentJitter = Math.round(report.jitter * 1000);
+              }
+              if (typeof report.packetsLost === 'number') {
+                packetsLostTotal += report.packetsLost;
+              }
+            }
+
+            if (report.type === 'candidate-pair' && (report.state === 'succeeded' || report.nominated)) {
+              if (typeof report.currentRoundTripTime === 'number' && report.currentRoundTripTime > 0) {
+                currentRtt = Math.round(report.currentRoundTripTime * 1000);
+              }
+            }
+
+            if (report.type === 'media-source' && (report.width || report.frameWidth)) {
+              const w = report.width || report.frameWidth;
+              const h = report.height || report.frameHeight;
+              if (w && h) resStr = `${w}x${h}`;
               if (typeof report.framesPerSecond === 'number' && report.framesPerSecond > 0) {
                 currentFps = Math.round(report.framesPerSecond);
               }
@@ -423,14 +414,34 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
 
             if (report.type === 'codec' && report.mimeType) {
               const mime = report.mimeType.toLowerCase();
-              if (mime.startsWith('audio/')) {
-                aCodec = report.mimeType;
-              }
-              if (mime.startsWith('video/')) {
-                vCodec = report.mimeType;
-              }
+              if (mime.startsWith('audio/')) aCodec = report.mimeType;
+              if (mime.startsWith('video/')) vCodec = report.mimeType;
             }
           });
+        }
+
+        if (!resStr || !currentFps) {
+          const allMediaTracks: MediaStreamTrack[] = [];
+          room.localParticipant.trackPublications.forEach((pub) => {
+            if (pub.track?.mediaStreamTrack) allMediaTracks.push(pub.track.mediaStreamTrack);
+          });
+          room.remoteParticipants.forEach((p) => {
+            p.trackPublications.forEach((pub) => {
+              if (pub.track?.mediaStreamTrack) allMediaTracks.push(pub.track.mediaStreamTrack);
+            });
+          });
+
+          for (const mst of allMediaTracks) {
+            if (mst.kind === 'video') {
+              const settings = mst.getSettings();
+              if (!resStr && settings.width && settings.height) {
+                resStr = `${settings.width}x${settings.height}`;
+              }
+              if (!currentFps && settings.frameRate) {
+                currentFps = Math.round(settings.frameRate);
+              }
+            }
+          }
         }
 
         const now = Date.now();
@@ -442,10 +453,10 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
           if (deltaSec > 0) {
             const sentDiff = totalBytesSent - prevStatsRef.current.bytesSent;
             const recvDiff = totalBytesRecv - prevStatsRef.current.bytesRecv;
-            if (sentDiff >= 0) {
+            if (sentDiff > 0) {
               bitOut = Math.round((sentDiff * 8) / deltaSec / 1000);
             }
-            if (recvDiff >= 0) {
+            if (recvDiff > 0) {
               bitIn = Math.round((recvDiff * 8) / deltaSec / 1000);
             }
           }
@@ -460,23 +471,19 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
         const totalPackets = packetsRecvTotal + packetsLostTotal;
         const lossRate = totalPackets > 0 ? Number(((packetsLostTotal / totalPackets) * 100).toFixed(2)) : 0;
 
-        if (hasActiveAudio && !aCodec) {
-          aCodec = 'audio/opus';
-        }
-        if (hasActiveVideo && !vCodec) {
-          vCodec = 'video/VP8';
-        }
+        const hasAudio = room.localParticipant.isMicrophoneEnabled || Array.from(room.remoteParticipants.values()).some(p => p.isMicrophoneEnabled);
+        const hasVideo = room.localParticipant.isCameraEnabled || room.localParticipant.isScreenShareEnabled || Array.from(room.remoteParticipants.values()).some(p => p.isCameraEnabled || p.isScreenShareEnabled);
 
         setWebrtcStats({
           rtt: currentRtt,
           jitter: currentJitter,
           packetLossPercent: lossRate,
-          bitrateInbound: bitIn < 0 ? 0 : bitIn,
-          bitrateOutbound: bitOut < 0 ? 0 : bitOut,
+          bitrateInbound: bitIn,
+          bitrateOutbound: bitOut,
           resolution: resStr,
           fps: currentFps,
-          audioCodec: hasActiveAudio ? (aCodec || 'audio/opus') : null,
-          videoCodec: hasActiveVideo ? (vCodec || 'video/VP8') : null,
+          audioCodec: hasAudio ? (aCodec || 'audio/opus') : null,
+          videoCodec: hasVideo ? (vCodec || 'video/VP8') : null,
           transportState: room.state,
         });
       } catch (err) {
