@@ -43,6 +43,15 @@ interface WebRTCStats {
   transportState: string | null;
 }
 
+const SCREEN_PRESETS = {
+  '1080p30': { width: 1920, height: 1080, fps: 30, bitrate: 4_000_000, label: '1080p 30 FPS' },
+  '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 7_000_000, label: '1080p 60 FPS' },
+  '1440p60': { width: 2560, height: 1440, fps: 60, bitrate: 10_000_000, label: '1440p (2K) 60 FPS' },
+  '4k60':    { width: 3840, height: 2160, fps: 60, bitrate: 15_000_000, label: '4K 60 FPS' },
+};
+
+type ScreenQualityKey = keyof typeof SCREEN_PRESETS;
+
 function peopleLabel(n: number) {
   if (n === 1) return '1 osoba';
   const last = n % 10;
@@ -204,6 +213,8 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
   const [isMicOn, setIsMicOn] = useState(false);
   const [isCamOn, setIsCamOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [screenQuality, setScreenQuality] = useState<ScreenQualityKey>('1080p60');
+
   const [showSidePanel, setShowSidePanel] = useState(false);
   const [activeSideTab, setActiveSideTab] = useState<'chat' | 'members' | 'stats'>('chat');
   const [copied, setCopied] = useState(false);
@@ -648,7 +659,27 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
 
   const toggleScreenShare = async () => {
     const nextState = !isScreenSharing;
-    await localParticipant.setScreenShareEnabled(nextState, { audio: true });
+
+    if (nextState) {
+      const preset = SCREEN_PRESETS[screenQuality];
+      await localParticipant.setScreenShareEnabled(
+        true,
+        {
+          audio: true,
+          resolution: { width: preset.width, height: preset.height },
+          framerate: preset.fps,
+        },
+        {
+          screenShareEncoding: {
+            maxBitrate: preset.bitrate,
+            maxFramerate: preset.fps,
+          },
+        }
+      );
+    } else {
+      await localParticipant.setScreenShareEnabled(false);
+    }
+
     setIsScreenSharing(nextState);
   };
 
@@ -1060,15 +1091,32 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
           <Icon name="cam" />
         </button>
 
-        <button
-          onClick={toggleScreenShare}
-          aria-pressed={isScreenSharing}
-          aria-label={isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'}
-          title={isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'}
-          className={`${ctrl} ${isScreenSharing ? ctrlOn : ctrlOff}`}
-        >
-          <Icon name="screen" />
-        </button>
+        <div className="flex items-center rounded-full border border-line bg-raised p-1">
+          <button
+            onClick={toggleScreenShare}
+            aria-pressed={isScreenSharing}
+            aria-label={isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'}
+            title={isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'}
+            className={`flex size-10 items-center justify-center rounded-full transition-colors ${
+              isScreenSharing ? 'bg-lime text-ink' : 'text-paper hover:bg-panel'
+            }`}
+          >
+            <Icon name="screen" />
+          </button>
+          <select
+            value={screenQuality}
+            onChange={(e) => setScreenQuality(e.target.value as ScreenQualityKey)}
+            disabled={isScreenSharing}
+            aria-label="Jakość udostępniania ekranu"
+            className="cursor-pointer bg-transparent px-2 text-xs font-medium text-paper outline-none disabled:opacity-50"
+          >
+            {Object.entries(SCREEN_PRESETS).map(([key, preset]) => (
+              <option key={key} value={key} className="bg-panel text-paper">
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <button
           onClick={() => {
