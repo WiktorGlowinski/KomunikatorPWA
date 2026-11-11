@@ -44,25 +44,25 @@ interface WebRTCStats {
 }
 
 const SCREEN_PRESETS = {
-  '1080p30': {
-    capture: { width: 1920, height: 1080, frameRate: 30 },
-    encoding: { maxBitrate: 4_000_000, maxFramerate: 30 },
-    label: '1080p 30 FPS',
-  },
   '1080p60': {
     capture: { width: 1920, height: 1080, frameRate: 60 },
-    encoding: { maxBitrate: 7_000_000, maxFramerate: 60 },
-    label: '1080p 60 FPS',
+    encoding: { maxBitrate: 6_000_000, maxFramerate: 60 },
+    label: '1080p 60 FPS (Zalecane - Płynne)',
+  },
+  '1080p30': {
+    capture: { width: 1920, height: 1080, frameRate: 30 },
+    encoding: { maxBitrate: 3_500_000, maxFramerate: 30 },
+    label: '1080p 30 FPS',
   },
   '1440p60': {
     capture: { width: 2560, height: 1440, frameRate: 60 },
-    encoding: { maxBitrate: 10_000_000, maxFramerate: 60 },
+    encoding: { maxBitrate: 9_000_000, maxFramerate: 60 },
     label: '1440p (2K) 60 FPS',
   },
-  '4k60': {
-    capture: { width: 3840, height: 2160, frameRate: 60 },
-    encoding: { maxBitrate: 15_000_000, maxFramerate: 60 },
-    label: '4K 60 FPS',
+  '4k30': {
+    capture: { width: 3840, height: 2160, frameRate: 30 },
+    encoding: { maxBitrate: 10_000_000, maxFramerate: 30 },
+    label: '4K 30 FPS (Wysokie obciążenie)',
   },
 };
 
@@ -678,7 +678,7 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
 
     if (nextState) {
       const selected = SCREEN_PRESETS[screenQuality];
-      await localParticipant.setScreenShareEnabled(
+      const publication = await localParticipant.setScreenShareEnabled(
         true,
         {
           audio: true,
@@ -688,6 +688,13 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
           videoEncoding: selected.encoding,
         }
       );
+
+      if (publication?.track?.mediaStreamTrack) {
+        const track = publication.track.mediaStreamTrack;
+        if ('contentHint' in track) {
+          (track as any).contentHint = 'motion';
+        }
+      }
     } else {
       await localParticipant.setScreenShareEnabled(false);
     }
