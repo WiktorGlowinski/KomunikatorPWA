@@ -9,7 +9,8 @@ import {
   useLocalParticipant,
   useRoomContext,
   VideoTrack,
-  useParticipants
+  useParticipants,
+  RoomAudioRenderer,
 } from '@livekit/components-react';
 import { Track } from 'livekit-client';
 import { supabase } from '@/lib/supabaseClient';
@@ -647,7 +648,7 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
 
   const toggleScreenShare = async () => {
     const nextState = !isScreenSharing;
-    await localParticipant.setScreenShareEnabled(nextState);
+    await localParticipant.setScreenShareEnabled(nextState, { audio: true });
     setIsScreenSharing(nextState);
   };
 
@@ -681,6 +682,8 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
 
   return (
     <div className="flex h-dvh w-full flex-col overflow-hidden bg-ink text-paper">
+      <RoomAudioRenderer />
+
       <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <Brand compact href="/dashboard" />
