@@ -12,7 +12,7 @@ import {
   useParticipants,
   RoomAudioRenderer,
 } from '@livekit/components-react';
-import { Track, ScreenSharePresets } from 'livekit-client';
+import { Track } from 'livekit-client';
 import { supabase } from '@/lib/supabaseClient';
 import { Brand } from '@/components/Brand';
 import { Icon } from '@/components/Icon';
@@ -44,10 +44,26 @@ interface WebRTCStats {
 }
 
 const SCREEN_PRESETS = {
-  '1080p30': { preset: ScreenSharePresets.h1080_30, label: '1080p 30 FPS' },
-  '1080p60': { preset: ScreenSharePresets.h1080_60, label: '1080p 60 FPS' },
-  '1440p60': { preset: ScreenSharePresets.h1440_60, label: '1440p (2K) 60 FPS' },
-  '4k60':    { preset: ScreenSharePresets.h2160_60, label: '4K 60 FPS' },
+  '1080p30': {
+    capture: { width: 1920, height: 1080, frameRate: 30 },
+    encoding: { maxBitrate: 4_000_000, maxFramerate: 30 },
+    label: '1080p 30 FPS',
+  },
+  '1080p60': {
+    capture: { width: 1920, height: 1080, frameRate: 60 },
+    encoding: { maxBitrate: 7_000_000, maxFramerate: 60 },
+    label: '1080p 60 FPS',
+  },
+  '1440p60': {
+    capture: { width: 2560, height: 1440, frameRate: 60 },
+    encoding: { maxBitrate: 10_000_000, maxFramerate: 60 },
+    label: '1440p (2K) 60 FPS',
+  },
+  '4k60': {
+    capture: { width: 3840, height: 2160, frameRate: 60 },
+    encoding: { maxBitrate: 15_000_000, maxFramerate: 60 },
+    label: '4K 60 FPS',
+  },
 };
 
 type ScreenQualityKey = keyof typeof SCREEN_PRESETS;
@@ -666,10 +682,10 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
         true,
         {
           audio: true,
-          resolution: selected.preset.capture,
+          resolution: selected.capture,
         },
         {
-          videoEncoding: selected.preset.encoding,
+          videoEncoding: selected.encoding,
         }
       );
     } else {
