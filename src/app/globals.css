@@ -1,26 +1,95 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/* ── Tokeny CHATTER ─────────────────────────────────────────────
+   Jeden akcent (limonka), ciepły grafit zamiast granatu.
+   Wszystko inne to odcienie papieru i grafitu. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-ink: #14110e;
+  --color-panel: #1d1915;
+  --color-raised: #28231d;
+  --color-line: #3a342b;
+  --color-paper: #f2ede4;
+  --color-mute: #a39a8b;
+  --color-lime: #c8f03c;
+  --color-lime-hover: #d9f76a;
+  --color-danger: #ff6b5a;
+
+  --font-display: var(--font-bebas), "Impact", sans-serif;
+  --font-body: var(--font-dm-sans), system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ink);
+  color: var(--color-paper);
+}
+
+::selection {
+  background: var(--color-lime);
+  color: var(--color-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-lime);
+  outline-offset: 2px;
+}
+
+/* ── Elementy wielokrotnego użytku ─────────────────────────── */
+@layer components {
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-lime text-ink hover:bg-lime-hover;
+  }
+  .btn-ghost {
+    @apply border border-line text-paper hover:border-mute hover:bg-raised;
+  }
+  .btn-danger {
+    @apply border border-danger/40 text-danger hover:bg-danger/10;
+  }
+  .field {
+    @apply min-h-11 w-full rounded-md border border-line bg-ink px-4 text-sm text-paper placeholder:text-mute/60 transition-colors focus:border-lime focus:ring-2 focus:ring-lime/25 focus:outline-none;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-paper;
+  }
+  .surface {
+    @apply rounded-lg border border-line bg-panel;
+  }
+}
+
+/* ── Jedyny ruch w aplikacji: kreski dźwięku z logo ───────────
+   Pulsują tylko wtedy, gdy ktoś mówi albo coś się ładuje. */
+@keyframes tick-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.tick-anim {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tick-pulse 900ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tick-anim {
+    animation: none;
+    opacity: 1;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
 }

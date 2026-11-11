@@ -2,140 +2,261 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import Image from 'next/image';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
+import { Brand } from '@/components/Brand';
+import { Ticks } from '@/components/Ticks';
+import { Icon } from '@/components/Icon';
+
+type AuthStatus = 'loading' | 'in' | 'out';
+
+const STEPS = [
+  {
+    title: 'Utwórz pokój',
+    text: 'Wpisz nazwę. Stanie się częścią adresu, więc łatwo ją podyktować albo wkleić w wiadomość.',
+  },
+  {
+    title: 'Wyślij link',
+    text: 'Skopiujesz go jednym kliknięciem z panelu albo już z wnętrza pokoju.',
+  },
+  {
+    title: 'Rozmawiaj',
+    text: 'Głos, kamera, udostępnianie ekranu i czat w jednym oknie przeglądarki.',
+  },
+];
+
+const UNDER_THE_HOOD = [
+  {
+    term: 'Dźwięk i obraz',
+    text: 'Przesyła je serwer SFU (LiveKit). Każdy uczestnik wysyła jeden strumień, a serwer rozsyła go dalej, więc łącze nie dławi się przy większej grupie.',
+  },
+  {
+    term: 'Konta, pokoje i czat',
+    text: 'Logowanie, lista pokojów i wiadomości trafiają do bazy PostgreSQL w Supabase.',
+  },
+  {
+    term: 'Przeglądarka',
+    text: 'Całość oparta jest na WebRTC. Nie potrzeba wtyczek ani instalatora.',
+  },
+];
 
 export default function HomePage() {
   const router = useRouter();
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [status, setStatus] = useState<AuthStatus>('loading');
   const [username, setUsername] = useState('');
+  const [roomName, setRoomName] = useState('');
 
   useEffect(() => {
     const checkSession = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setIsLoggedIn(true);
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('id', user.id)
-          .single();
-        if (profile?.username) {
-          setUsername(profile.username);
-        }
+      if (!user) {
+        setStatus('out');
+        return;
+      }
+      setStatus('in');
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('id', user.id)
+        .single();
+      if (profile?.username) {
+        setUsername(profile.username);
       }
     };
     checkSession();
   }, []);
 
+  // Nazwa wpisana na stronie głównej czeka w panelu, nawet jeśli trzeba się najpierw zalogować
+  const handleStart = (e: React.FormEvent) => {
+    e.preventDefault();
+    const slug = roomName.trim().toLowerCase().replace(/\s+/g, '-');
+    if (slug) {
+      try {
+        sessionStorage.setItem('chatter:room', slug);
+      } catch {
+        /* tryb prywatny – trudno, wpisze nazwę ponownie */
+      }
+    }
+    router.push(status === 'in' ? '/dashboard' : '/login');
+  };
+
   return (
-    <div className="relative min-h-screen bg-[#090c15] text-slate-100 flex flex-col justify-between overflow-hidden selection:bg-blue-600 selection:text-white font-sans">
-      <div className="pointer-events-none absolute top-[-100px] left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-blue-600/15 blur-[130px] rounded-full" />
-      <div className="pointer-events-none absolute bottom-[-100px] right-[-100px] w-[500px] h-[500px] bg-indigo-600/10 blur-[150px] rounded-full" />
+    <div className="flex min-h-dvh flex-col">
+      <header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-4 sm:px-8">
+        <Brand />
 
-      <header className="relative z-10 max-w-6xl w-full mx-auto px-6 py-4 flex items-center justify-between border-b border-slate-800/80">
-        <div className="flex items-center gap-5 cursor-pointer" onClick={() => router.push('/')}>
-          <Image
-            src="/logo.png"
-            alt="CHATTER"
-            width={120}
-            height={120}
-            priority
-            className="h-24 sm:h-32 w-auto object-contain drop-shadow-[0_0_15px_rgba(59,130,246,0.3)]"
-            onError={(e) => {
-              (e.target as HTMLElement).style.display = 'none';
-            }}
-          />
-         
-        </div>
-
-        <div>
-          {isLoggedIn ? (
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold uppercase tracking-wider transition shadow-lg shadow-blue-600/25 active:scale-95"
-            >
-              Panel ({username || 'Konto'}) →
-            </button>
-          ) : (
-            <button
-              onClick={() => router.push('/login')}
-              className="px-5 py-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs font-semibold uppercase tracking-wider transition active:scale-95"
-            >
-              Zaloguj się
-            </button>
-          )}
-        </div>
+        {status === 'loading' ? (
+          <div className="h-11 w-28 rounded-md bg-raised" aria-hidden="true" />
+        ) : status === 'in' ? (
+          <Link href="/dashboard" className="btn btn-ghost">
+            {username ? `Panel: ${username}` : 'Panel'}
+          </Link>
+        ) : (
+          <Link href="/login" className="btn btn-ghost">
+            Zaloguj się
+          </Link>
+        )}
       </header>
 
-      <main className="relative z-10 max-w-5xl mx-auto px-6 py-16 flex-1 flex flex-col justify-center items-center text-center">
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-950/80 border border-blue-500/40 text-blue-400 text-xs font-semibold uppercase tracking-wider mb-8 shadow-sm">
-          Szybka i prywatna komunikacja
-        </div>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-5 sm:px-8">
+        {/* Hero */}
+        <section className="grid items-center gap-14 py-12 sm:py-20 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+          <div>
+            <h1 className="font-display text-[clamp(3.75rem,12vw,8.5rem)] leading-[0.88] tracking-wide text-paper">
+              Wklej link.
+              <br />
+              Jesteś w pokoju.
+            </h1>
 
-        <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-white mb-6 leading-tight max-w-3xl">
-          Głos i wideo bez zbędnych ograniczeń. <br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-blue-300 to-indigo-300">
-            Po prostu rozmawiaj.
-          </span>
-        </h1>
-
-        <p className="text-slate-400 text-base sm:text-lg max-w-2xl mb-10 leading-relaxed font-normal">
-          CHATTER to minimalistyczna platforma do prowadzenia płynnych rozmów wideo i głosowych. Twórz własne pokoje, wysyłaj linki i rozmawiaj bez instalowania aplikacji.
-        </p>
-
-        <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
-          <button
-            onClick={() => router.push(isLoggedIn ? '/dashboard' : '/login')}
-            className="w-full sm:w-auto px-9 py-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm tracking-wide transition-all shadow-xl shadow-blue-600/30 hover:shadow-blue-600/40 active:scale-95"
-          >
-            {isLoggedIn ? 'Otwórz panel główny' : 'Rozpocznij teraz'}
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-16 w-full text-left">
-          <div className="p-6 rounded-2xl bg-[#121724]/90 border border-slate-800/80 hover:border-blue-500/40 transition-all duration-300 hover:-translate-y-1 shadow-lg">
-            <div className="w-10 h-10 rounded-xl bg-blue-600/15 text-blue-400 flex items-center justify-center mb-4 border border-blue-500/20">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </div>
-            <h3 className="text-white font-bold text-base mb-2">Krystaliczny dźwięk</h3>
-            <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
-              Architektura SFU gwarantuje minimalne opóźnienia oraz stabilne przesyłanie strumieni audio-wideo bez obciążania systemu.
+            <p className="mt-6 max-w-md text-lg leading-relaxed text-mute">
+              Rozmowy głosowe, wideo i czat w przeglądarce. Niczego nie
+              instalujesz i niczego nie konfigurujesz.
             </p>
+
+            <form onSubmit={handleStart} className="mt-10 max-w-lg">
+              <label htmlFor="room-name" className="label">
+                Nazwa pokoju
+              </label>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <div className="flex min-h-12 flex-1 items-center rounded-md border border-line bg-panel transition-colors focus-within:border-lime focus-within:ring-2 focus-within:ring-lime/25">
+                  <span className="select-none pl-4 text-sm text-mute">/room/</span>
+                  <input
+                    id="room-name"
+                    type="text"
+                    value={roomName}
+                    onChange={(e) => setRoomName(e.target.value)}
+                    placeholder="sala-projektowa"
+                    autoComplete="off"
+                    className="min-w-0 flex-1 bg-transparent py-3 pl-1 pr-4 text-sm text-paper placeholder:text-mute/60 focus:outline-none"
+                  />
+                </div>
+                <button type="submit" className="btn btn-primary min-h-12 px-7 text-base">
+                  Utwórz pokój
+                </button>
+              </div>
+              <p className="mt-3 text-sm text-mute">
+                Wejdzie każdy zalogowany, kto dostanie link.
+              </p>
+            </form>
           </div>
 
-          <div className="p-6 rounded-2xl bg-[#121724]/90 border border-slate-800/80 hover:border-blue-500/40 transition-all duration-300 hover:-translate-y-1 shadow-lg">
-            <div className="w-10 h-10 rounded-xl bg-blue-600/15 text-blue-400 flex items-center justify-center mb-4 border border-blue-500/20">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <h3 className="text-white font-bold text-base mb-2">Pełna prywatność</h3>
-            <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
-              Brak zbędnych trackerów i skryptów analitycznych. Twoje transmisje audio i wideo istnieją tylko podczas trwania sesji.
-            </p>
-          </div>
+          <RoomMock />
+        </section>
 
-          <div className="p-6 rounded-2xl bg-[#121724]/90 border border-slate-800/80 hover:border-blue-500/40 transition-all duration-300 hover:-translate-y-1 shadow-lg">
-            <div className="w-10 h-10 rounded-xl bg-blue-600/15 text-blue-400 flex items-center justify-center mb-4 border border-blue-500/20">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
-            <h3 className="text-white font-bold text-base mb-2">Szybki dostęp</h3>
-            <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
-              Twórz pokoje w kilka sekund. Dołączaj bezpośrednio z poziomu przeglądarki bez konieczności pobierania jakichkolwiek plików.
-            </p>
-          </div>
-        </div>
+        {/* Jak to działa – to faktycznie sekwencja, więc numeracja ma sens */}
+        <section className="border-t border-line py-16">
+          <h2 className="font-display text-5xl tracking-wide sm:text-6xl">
+            Trzy kroki do rozmowy
+          </h2>
+          <ol className="mt-10 grid gap-10 md:grid-cols-3 md:gap-0">
+            {STEPS.map((step, i) => (
+              <li
+                key={step.title}
+                className={`md:px-8 ${
+                  i === 0 ? 'md:pl-0' : 'md:border-l md:border-line'
+                }`}
+              >
+                <span className="font-display text-6xl leading-none text-lime">
+                  {i + 1}
+                </span>
+                <h3 className="mt-3 text-lg font-semibold">{step.title}</h3>
+                <p className="mt-2 max-w-xs leading-relaxed text-mute">
+                  {step.text}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {/* Technologia – krótko, bo to projekt inżynierski */}
+        <section className="grid gap-8 border-t border-line py-16 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16">
+          <h2 className="font-display text-5xl tracking-wide sm:text-6xl">
+            Co jest pod spodem
+          </h2>
+          <dl className="divide-y divide-line border-y border-line">
+            {UNDER_THE_HOOD.map((item) => (
+              <div key={item.term} className="grid gap-1 py-5 sm:grid-cols-[11rem_1fr] sm:gap-6">
+                <dt className="font-semibold">{item.term}</dt>
+                <dd className="max-w-xl leading-relaxed text-mute">{item.text}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
       </main>
 
-      <footer className="relative z-10 py-6 text-center text-xs text-slate-500 border-t border-slate-800/60 flex flex-col sm:flex-row items-center justify-between px-6 max-w-6xl w-full mx-auto gap-2">
+      <footer className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-2 border-t border-line px-5 py-6 text-sm text-mute sm:flex-row sm:px-8">
         <span>CHATTER © {new Date().getFullYear()}</span>
-        <span>Bezpieczna komunikacja WebRTC</span>
+        <span>Zbudowane na WebRTC</span>
       </footer>
+    </div>
+  );
+}
+
+/** Makieta pokoju: pokazuje produkt zamiast go opisywać. Czysto dekoracyjna. */
+function RoomMock() {
+  const people = [
+    { name: 'Ola', speaking: true, muted: false },
+    { name: 'Marek', speaking: false, muted: true },
+    { name: 'Kasia', speaking: false, muted: false },
+    { name: 'Tomek', speaking: false, muted: false },
+  ];
+
+  return (
+    <div
+      aria-hidden="true"
+      className="rounded-lg border border-line bg-panel p-3 shadow-[10px_10px_0_0_#c8f03c] sm:p-4"
+    >
+      <div className="mb-3 flex items-center justify-between px-1 text-sm">
+        <span className="font-semibold">sala-projektowa</span>
+        <span className="text-mute">4 osoby</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {people.map((p) => (
+          <div
+            key={p.name}
+            className={`relative flex aspect-[4/3] items-center justify-center rounded-md bg-raised ${
+              p.speaking ? 'ring-2 ring-lime' : ''
+            }`}
+          >
+            <div className="relative">
+              {p.speaking && (
+                <Ticks
+                  active
+                  className="absolute right-full top-1/2 mr-0.5 size-9 -translate-y-1/2 text-lime sm:size-10"
+                />
+              )}
+              <div
+                className={`font-display flex size-14 items-center justify-center rounded-full text-3xl sm:size-16 ${
+                  p.speaking ? 'bg-lime text-ink' : 'bg-line text-paper'
+                }`}
+              >
+                {p.name[0]}
+              </div>
+            </div>
+
+            <div className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded bg-ink/80 px-2 py-0.5 text-xs">
+              {p.name}
+              {p.muted && <Icon name="micOff" className="size-3.5 text-danger" />}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-center justify-center gap-2">
+        <span className="flex size-10 items-center justify-center rounded-full bg-raised">
+          <Icon name="mic" className="size-5" />
+        </span>
+        <span className="flex size-10 items-center justify-center rounded-full bg-raised">
+          <Icon name="cam" className="size-5" />
+        </span>
+        <span className="flex size-10 items-center justify-center rounded-full bg-raised">
+          <Icon name="screen" className="size-5" />
+        </span>
+        <span className="flex size-10 items-center justify-center rounded-full bg-lime text-ink">
+          <Icon name="chat" className="size-5" />
+        </span>
+      </div>
     </div>
   );
 }

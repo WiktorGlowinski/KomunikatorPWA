@@ -3,7 +3,10 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
+import { Brand } from '@/components/Brand';
+import { Icon } from '@/components/Icon';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -54,141 +57,162 @@ export default function LoginPage() {
     }
   };
 
-  return (
-    <div className="relative min-h-screen bg-[#090c15] text-slate-100 flex flex-col justify-between overflow-hidden selection:bg-blue-600 selection:text-white font-sans">
-      <div className="pointer-events-none absolute top-[-100px] left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-blue-600/15 blur-[130px] rounded-full" />
-      <div className="pointer-events-none absolute bottom-[-100px] right-[-100px] w-[500px] h-[500px] bg-indigo-600/10 blur-[150px] rounded-full" />
+  const switchMode = (signUp: boolean) => {
+    setIsSignUp(signUp);
+    setErrorMsg('');
+  };
 
-      <header className="relative z-10 max-w-6xl w-full mx-auto px-6 py-6 flex items-center justify-between border-b border-slate-800/80">
-        <div className="flex items-center gap-3.5 cursor-pointer" onClick={() => router.push('/')}>
-          <Image
-            src="/logo.png"
-            alt="CHATTER"
-            width={48}
-            height={48}
-            priority
-            className="h-10 w-auto object-contain"
-            onError={(e) => {
-              (e.target as HTMLElement).style.display = 'none';
-            }}
-          />
-          <span className="text-xl sm:text-2xl font-black tracking-tight text-white uppercase font-mono">
-            CHATTER
-          </span>
+  return (
+    <div className="grid min-h-dvh lg:grid-cols-[5fr_6fr]">
+      {/* Limonkowy panel z logo – tylko na dużych ekranach */}
+      <aside className="hidden flex-col justify-between bg-lime p-10 text-ink lg:flex">
+        <Link
+          href="/"
+          className="inline-flex w-fit items-center gap-2 rounded-md font-semibold hover:underline focus-visible:outline-ink"
+        >
+          <Icon name="back" className="size-5" />
+          Strona główna
+        </Link>
+
+        <Image
+          src="/logo-full-ink.png"
+          alt="CHATTER"
+          width={535}
+          height={720}
+          priority
+          className="mx-auto h-[min(52vh,30rem)] w-auto"
+        />
+
+        <p className="font-display max-w-sm text-5xl leading-[0.95] tracking-wide">
+          Pokój w kilka sekund. Link w jedno kliknięcie.
+        </p>
+      </aside>
+
+      <div className="flex flex-col px-5 py-4 sm:px-8 lg:px-16">
+        <div className="lg:hidden">
+          <Brand />
         </div>
 
-        <button
-          onClick={() => router.push('/')}
-          className="px-5 py-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs font-semibold uppercase tracking-wider transition active:scale-95"
-        >
-          ← Powrót
-        </button>
-      </header>
-
-      <main className="relative z-10 max-w-md w-full mx-auto px-6 py-12 flex-1 flex flex-col justify-center">
-        <div className="p-8 rounded-2xl bg-[#121724]/90 border border-slate-800/80 shadow-2xl backdrop-blur-md">
-          <div className="mb-6 text-center">
-            <div className="inline-flex items-center px-3.5 py-1 rounded-full bg-blue-950/80 border border-blue-500/40 text-blue-400 text-xs font-semibold uppercase tracking-wider mb-3">
-              {isSignUp ? 'Rejestracja konta' : 'Autoryzacja dostępu'}
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight text-white mb-2">
-              {isSignUp ? 'Utwórz konto w CHATTER' : 'Zaloguj się do CHATTER'}
-            </h1>
-            <p className="text-slate-400 text-xs sm:text-sm">
-              {isSignUp 
-                ? 'Wprowadź swoje dane, aby utworzyć konto w systemie.' 
-                : 'Podaj swoje dane uwierzytelniające, aby przejść do panelu sal.'}
-            </p>
+        <main className="mx-auto my-auto w-full max-w-sm py-10">
+          <div
+            role="tablist"
+            aria-label="Tryb"
+            className="mb-8 grid grid-cols-2 rounded-md border border-line p-1 text-sm font-semibold"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!isSignUp}
+              onClick={() => switchMode(false)}
+              className={`min-h-10 rounded transition-colors ${
+                !isSignUp ? 'bg-lime text-ink' : 'text-mute hover:text-paper'
+              }`}
+            >
+              Logowanie
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isSignUp}
+              onClick={() => switchMode(true)}
+              className={`min-h-10 rounded transition-colors ${
+                isSignUp ? 'bg-lime text-ink' : 'text-mute hover:text-paper'
+              }`}
+            >
+              Nowe konto
+            </button>
           </div>
 
+          <h1 className="font-display text-5xl leading-none tracking-wide">
+            {isSignUp ? 'Załóż konto' : 'Wejdź do swoich pokojów'}
+          </h1>
+          <p className="mt-3 text-mute">
+            {isSignUp
+              ? 'Wystarczą nazwa użytkownika, e-mail i hasło.'
+              : 'Zaloguj się, żeby utworzyć pokój albo dołączyć do rozmowy.'}
+          </p>
+
           {errorMsg && (
-            <div className="mb-5 p-3.5 rounded-xl border border-rose-500/30 bg-rose-950/40 text-rose-300 text-xs leading-relaxed flex items-center gap-2">
-              <svg className="w-4 h-4 shrink-0 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+            <div
+              role="alert"
+              className="mt-6 flex items-start gap-2.5 rounded-md border border-danger/40 bg-danger/10 p-3.5 text-sm text-danger"
+            >
+              <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
               <span>{errorMsg}</span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             {isSignUp && (
               <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                <label htmlFor="username" className="label">
                   Nazwa użytkownika
                 </label>
                 <input
+                  id="username"
                   type="text"
                   required
+                  autoComplete="username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="np. Wiktor"
-                  className="w-full px-4 py-3 rounded-xl bg-[#0b0e17] border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500 transition"
+                  className="field"
                 />
               </div>
             )}
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+              <label htmlFor="email" className="label">
                 Adres e-mail
               </label>
               <input
+                id="email"
                 type="email"
                 required
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="uzytkownik@domena.pl"
-                className="w-full px-4 py-3 rounded-xl bg-[#0b0e17] border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500 transition"
+                className="field"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+              <label htmlFor="password" className="label">
                 Hasło
               </label>
               <input
+                id="password"
                 type="password"
                 required
+                minLength={6}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
-                className="w-full px-4 py-3 rounded-xl bg-[#0b0e17] border border-slate-800 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500 transition"
+                placeholder="••••••••"
+                className="field"
               />
+              {isSignUp && (
+                <p className="mt-1.5 text-sm text-mute">Co najmniej 6 znaków.</p>
+              )}
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full mt-2 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-sm tracking-wide transition-all shadow-lg shadow-blue-600/30 hover:shadow-blue-600/40 active:scale-95"
+              className="btn btn-primary mt-2 min-h-12 w-full text-base"
             >
-              {loading 
-                ? 'Weryfikacja...' 
-                : isSignUp 
-                  ? 'Zarejestruj konto' 
+              {loading
+                ? isSignUp
+                  ? 'Zakładanie konta…'
+                  : 'Logowanie…'
+                : isSignUp
+                  ? 'Załóż konto'
                   : 'Zaloguj się'}
             </button>
           </form>
-
-          <div className="mt-6 pt-5 border-t border-slate-800/80 text-center">
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setErrorMsg('');
-              }}
-              className="text-xs text-slate-400 hover:text-blue-400 transition"
-            >
-              {isSignUp 
-                ? 'Masz już konto? Zaloguj się' 
-                : 'Nie masz konta? Zarejestruj się'}
-            </button>
-          </div>
-        </div>
-      </main>
-
-      <footer className="relative z-10 py-6 text-center text-xs text-slate-500 border-t border-slate-800/60 flex flex-col sm:flex-row items-center justify-between px-6 max-w-6xl w-full mx-auto gap-2">
-        <span>CHATTER © {new Date().getFullYear()}</span>
-        <span>Bezpieczna komunikacja WebRTC</span>
-      </footer>
+        </main>
+      </div>
     </div>
   );
 }
