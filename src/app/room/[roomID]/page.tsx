@@ -12,7 +12,7 @@ import {
   useParticipants,
   RoomAudioRenderer,
 } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { Track, ScreenSharePresets } from 'livekit-client';
 import { supabase } from '@/lib/supabaseClient';
 import { Brand } from '@/components/Brand';
 import { Icon } from '@/components/Icon';
@@ -44,10 +44,10 @@ interface WebRTCStats {
 }
 
 const SCREEN_PRESETS = {
-  '1080p30': { width: 1920, height: 1080, fps: 30, bitrate: 4_000_000, label: '1080p 30 FPS' },
-  '1080p60': { width: 1920, height: 1080, fps: 60, bitrate: 7_000_000, label: '1080p 60 FPS' },
-  '1440p60': { width: 2560, height: 1440, fps: 60, bitrate: 10_000_000, label: '1440p (2K) 60 FPS' },
-  '4k60':    { width: 3840, height: 2160, fps: 60, bitrate: 15_000_000, label: '4K 60 FPS' },
+  '1080p30': { preset: ScreenSharePresets.h1080_30, label: '1080p 30 FPS' },
+  '1080p60': { preset: ScreenSharePresets.h1080_60, label: '1080p 60 FPS' },
+  '1440p60': { preset: ScreenSharePresets.h1440_60, label: '1440p (2K) 60 FPS' },
+  '4k60':    { preset: ScreenSharePresets.h2160_60, label: '4K 60 FPS' },
 };
 
 type ScreenQualityKey = keyof typeof SCREEN_PRESETS;
@@ -661,19 +661,15 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
     const nextState = !isScreenSharing;
 
     if (nextState) {
-      const preset = SCREEN_PRESETS[screenQuality];
+      const selected = SCREEN_PRESETS[screenQuality];
       await localParticipant.setScreenShareEnabled(
         true,
         {
           audio: true,
-          resolution: { width: preset.width, height: preset.height },
-          framerate: preset.fps,
+          resolution: selected.preset.capture,
         },
         {
-          screenShareEncoding: {
-            maxBitrate: preset.bitrate,
-            maxFramerate: preset.fps,
-          },
+          videoEncoding: selected.preset.encoding,
         }
       );
     } else {
@@ -1110,9 +1106,9 @@ function CustomRoomUI({ roomId, currentUser, username }: { roomId: string; curre
             aria-label="Jakość udostępniania ekranu"
             className="cursor-pointer bg-transparent px-2 text-xs font-medium text-paper outline-none disabled:opacity-50"
           >
-            {Object.entries(SCREEN_PRESETS).map(([key, preset]) => (
+            {Object.entries(SCREEN_PRESETS).map(([key, item]) => (
               <option key={key} value={key} className="bg-panel text-paper">
-                {preset.label}
+                {item.label}
               </option>
             ))}
           </select>
