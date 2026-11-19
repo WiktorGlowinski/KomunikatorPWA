@@ -66,7 +66,6 @@ export default function HomePage() {
     checkSession();
   }, []);
 
-  // Nazwa wpisana na stronie głównej czeka w panelu, nawet jeśli trzeba się najpierw zalogować
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
     const slug = roomName.trim().toLowerCase().replace(/\s+/g, '-');
@@ -74,7 +73,6 @@ export default function HomePage() {
       try {
         sessionStorage.setItem('chatter:room', slug);
       } catch {
-        /* tryb prywatny – trudno, wpisze nazwę ponownie */
       }
     }
     router.push(status === 'in' ? '/dashboard' : '/login');
@@ -99,7 +97,6 @@ export default function HomePage() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 sm:px-8">
-        {/* Hero */}
         <section className="grid items-center gap-14 py-12 sm:py-20 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
           <div>
             <h1 className="font-display text-[clamp(3.75rem,12vw,8.5rem)] leading-[0.88] tracking-wide text-paper">
@@ -143,7 +140,6 @@ export default function HomePage() {
           <RoomMock />
         </section>
 
-        {/* Jak to działa – to faktycznie sekwencja, więc numeracja ma sens */}
         <section className="border-t border-line py-16">
           <h2 className="font-display text-5xl tracking-wide sm:text-6xl">
             Trzy kroki do rozmowy
@@ -168,7 +164,6 @@ export default function HomePage() {
           </ol>
         </section>
 
-        {/* Technologia – krótko, bo to projekt inżynierski */}
         <section className="grid gap-8 border-t border-line py-16 lg:grid-cols-[0.8fr_1.2fr] lg:gap-16">
           <h2 className="font-display text-5xl tracking-wide sm:text-6xl">
             Co jest pod spodem
@@ -192,7 +187,6 @@ export default function HomePage() {
   );
 }
 
-/** Makieta pokoju: pokazuje produkt zamiast go opisywać. Czysto dekoracyjna. */
 function RoomMock() {
   const people = [
     { name: 'Ola', speaking: true, muted: false },

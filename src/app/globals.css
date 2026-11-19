@@ -1,8 +1,5 @@
 @import "tailwindcss";
 
-/* ── Tokeny CHATTER ─────────────────────────────────────────────
-   Jeden akcent (limonka), ciepły grafit zamiast granatu.
-   Wszystko inne to odcienie papieru i grafitu. */
 @theme inline {
   --color-ink: #14110e;
   --color-panel: #1d1915;
@@ -37,7 +34,6 @@ body {
   outline-offset: 2px;
 }
 
-/* ── Elementy wielokrotnego użytku ─────────────────────────── */
 @layer components {
   .btn {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
@@ -62,8 +58,6 @@ body {
   }
 }
 
-/* ── Jedyny ruch w aplikacji: kreski dźwięku z logo ───────────
-   Pulsują tylko wtedy, gdy ktoś mówi albo coś się ładuje. */
 @keyframes tick-pulse {
   0%,
   100% {

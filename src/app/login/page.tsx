@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
+import { getErrorMessage } from '@/lib/types';
 import { Brand } from '@/components/Brand';
 import { Icon } from '@/components/Icon';
 
@@ -44,13 +45,14 @@ export default function LoginPage() {
         if (error) throw error;
         router.push('/dashboard');
       }
-    } catch (err: any) {
-      if (err.message === 'Invalid login credentials') {
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err, 'Wystąpił błąd podczas autoryzacji.');
+      if (msg === 'Invalid login credentials') {
         setErrorMsg('Nieprawidłowy adres e-mail lub hasło.');
-      } else if (err.message === 'User already registered') {
+      } else if (msg === 'User already registered') {
         setErrorMsg('Użytkownik o tym adresie e-mail już istnieje.');
       } else {
-        setErrorMsg(err.message || 'Wystąpił błąd podczas autoryzacji.');
+        setErrorMsg(msg);
       }
     } finally {
       setLoading(false);
@@ -64,7 +66,6 @@ export default function LoginPage() {
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[5fr_6fr]">
-      {/* Limonkowy panel z logo – tylko na dużych ekranach */}
       <aside className="hidden flex-col justify-between bg-lime p-10 text-ink lg:flex">
         <Link
           href="/"

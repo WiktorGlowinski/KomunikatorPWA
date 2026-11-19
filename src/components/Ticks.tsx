@@ -1,8 +1,3 @@
-/**
- * Kreski dźwięku z logo CHATTER – motyw przewodni aplikacji.
- * `active` włącza pulsowanie (ktoś mówi / trwa ładowanie).
- * Kolor dziedziczony z `currentColor`.
- */
 export function Ticks({
   active = false,
   className = "size-6",

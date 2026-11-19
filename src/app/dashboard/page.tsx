@@ -1,21 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
+import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
+import { getErrorMessage, type Room } from '@/lib/types';
 import { Brand } from '@/components/Brand';
 import { Icon } from '@/components/Icon';
 import { FullScreenLoader } from '@/components/Spinner';
-
-interface Room {
-  id: string;
-  name: string;
-  description?: string | null;
-  created_at: string;
-  owner_id: string;
-  is_private: boolean;
-  access_code?: string | null;
-}
 
 interface RoomMember {
   id: string;
@@ -23,17 +16,25 @@ interface RoomMember {
   user_id: string;
   role: 'owner' | 'moderator' | 'member';
   joined_at: string;
-  profiles?: {
-    username: string;
-    avatar_url: string | null;
-  };
+  profiles?:
+    | {
+        username: string;
+        avatar_url: string | null;
+      }
+    | {
+        username: string;
+        avatar_url: string | null;
+      }[]
+    | null;
 }
+
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 
 export default function DashboardPage() {
   const router = useRouter();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -50,7 +51,7 @@ export default function DashboardPage() {
   const [editIsPrivate, setEditIsPrivate] = useState(false);
   const [editAccessCode, setEditAccessCode] = useState('');
   const [savingRoom, setSavingRoom] = useState(false);
-
+  const [deletingRoomId, setDeletingRoomId] = useState<string | null>(null);
   const [managingMembersRoom, setManagingMembersRoom] = useState<Room | null>(null);
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
@@ -72,29 +73,42 @@ export default function DashboardPage() {
   const [passwordError, setPasswordError] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
 
+  const fetchRooms = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('rooms')
+      .select('id, name, description, created_at, owner_id, is_private')
+      .order('created_at', { ascending: false });
+
+    if (!error && data) {
+      setRooms(data as Room[]);
+    }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+      if (!authUser) {
         router.push('/login');
         return;
       }
-      setUser(user);
+      setUser(authUser);
 
       const { data: profile } = await supabase
         .from('profiles')
         .select('username, avatar_url')
-        .eq('id', user.id)
+        .eq('id', authUser.id)
         .maybeSingle();
 
       if (profile) {
-        const currentName = profile.username || user.email?.split('@')[0] || '';
+        const currentName = profile.username || authUser.email?.split('@')[0] || '';
         setUsername(currentName);
         setNewUsername(currentName);
         setAvatarUrl(profile.avatar_url || '');
         setNewAvatarUrl(profile.avatar_url || '');
       } else {
-        const fallbackName = user.email?.split('@')[0] || '';
+        const fallbackName = authUser.email?.split('@')[0] || '';
         setUsername(fallbackName);
         setNewUsername(fallbackName);
       }
@@ -110,8 +124,8 @@ export default function DashboardPage() {
       await fetchRooms();
       setLoading(false);
     };
-    init();
-  }, [router]);
+    void init();
+  }, [router, fetchRooms]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -124,17 +138,6 @@ export default function DashboardPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-
-  const fetchRooms = async () => {
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setRooms(data);
-    }
-  };
 
   const slug = roomName.trim().toLowerCase().replace(/\s+/g, '-');
 
@@ -153,10 +156,10 @@ export default function DashboardPage() {
             name: cleanSlug,
             owner_id: user.id,
             is_private: isPrivateNew,
-            access_code: isPrivateNew ? (accessCodeNew.trim() || null) : null,
+            access_code: isPrivateNew ? accessCodeNew.trim() || null : null,
           },
         ])
-        .select()
+        .select('id, name')
         .single();
 
       if (error) throw error;
@@ -173,19 +176,58 @@ export default function DashboardPage() {
       }
 
       router.push(`/room/${cleanSlug}`);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Błąd podczas tworzenia pokoju.');
+    } catch (err: unknown) {
+      setErrorMsg(getErrorMessage(err, 'Błąd podczas tworzenia pokoju.'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleOpenEditRoom = (room: Room) => {
+  const handleOpenEditRoom = async (room: Room) => {
     setEditingRoom(room);
     setEditName(room.name);
     setEditDescription(room.description || '');
     setEditIsPrivate(room.is_private || false);
-    setEditAccessCode(room.access_code || '');
+    setEditAccessCode('');
+
+    if (room.is_private) {
+      const { data } = await supabase
+        .from('rooms')
+        .select('access_code')
+        .eq('id', room.id)
+        .maybeSingle();
+      if (data?.access_code) {
+        setEditAccessCode(data.access_code);
+      }
+    }
+  };
+
+  const handleDeleteRoom = async (room: Room) => {
+    if (!user || room.owner_id !== user.id) return;
+
+    const confirmed = window.confirm(
+      `Czy na pewno chcesz trwale usunąć pokój "${room.name}"? Tej operacji nie można cofnąć.`
+    );
+    if (!confirmed) return;
+
+    setDeletingRoomId(room.id);
+    try {
+      const { error } = await supabase
+        .from('rooms')
+        .delete()
+        .eq('id', room.id)
+        .eq('owner_id', user.id);
+
+      if (error) throw error;
+
+      setRooms((prev) => prev.filter((r) => r.id !== room.id));
+      if (editingRoom?.id === room.id) setEditingRoom(null);
+      if (managingMembersRoom?.id === room.id) setManagingMembersRoom(null);
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Błąd podczas usuwania pokoju.'));
+    } finally {
+      setDeletingRoomId(null);
+    }
   };
 
   const handleSaveRoomSettings = async (e: React.FormEvent) => {
@@ -203,7 +245,7 @@ export default function DashboardPage() {
           name: cleanSlug,
           description: editDescription.trim() || null,
           is_private: editIsPrivate,
-          access_code: editIsPrivate ? (editAccessCode.trim() || null) : null,
+          access_code: editIsPrivate ? editAccessCode.trim() || null : null,
         })
         .eq('id', editingRoom.id);
 
@@ -211,11 +253,25 @@ export default function DashboardPage() {
 
       setEditingRoom(null);
       await fetchRooms();
-    } catch (err: any) {
-      alert(err.message || 'Błąd podczas edycji pokoju.');
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Błąd podczas edycji pokoju.'));
     } finally {
       setSavingRoom(false);
     }
+  };
+
+  const fetchRoomMembers = async (roomId: string) => {
+    setLoadingMembers(true);
+    const { data, error } = await supabase
+      .from('room_members')
+      .select('id, room_id, user_id, role, joined_at, profiles:user_id(username, avatar_url)')
+      .eq('room_id', roomId)
+      .order('joined_at', { ascending: true });
+
+    if (!error && data) {
+      setMembers(data as RoomMember[]);
+    }
+    setLoadingMembers(false);
   };
 
   const handleOpenMembersModal = async (room: Room) => {
@@ -226,23 +282,9 @@ export default function DashboardPage() {
     await fetchRoomMembers(room.id);
   };
 
-  const fetchRoomMembers = async (roomId: string) => {
-    setLoadingMembers(true);
-    const { data, error } = await supabase
-      .from('room_members')
-      .select('*, profiles:user_id(username, avatar_url)')
-      .eq('room_id', roomId)
-      .order('joined_at', { ascending: true });
-
-    if (!error && data) {
-      setMembers(data as any);
-    }
-    setLoadingMembers(false);
-  };
-
   const handleAddUserToRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!managingMembersRoom || !searchAddUsername.trim()) return;
+    if (!managingMembersRoom || !searchAddUsername.trim() || !user) return;
 
     setMemberActionMsg('');
     setMemberActionError('');
@@ -281,13 +323,13 @@ export default function DashboardPage() {
       setMemberActionMsg(`Dodano użytkownika ${targetUsername} do pokoju.`);
       setSearchAddUsername('');
       await fetchRoomMembers(managingMembersRoom.id);
-    } catch (err: any) {
-      setMemberActionError(err.message || 'Błąd podczas dodawania użytkownika.');
+    } catch (err: unknown) {
+      setMemberActionError(getErrorMessage(err, 'Błąd podczas dodawania użytkownika.'));
     }
   };
 
   const handleToggleModeratorRole = async (member: RoomMember) => {
-    if (!managingMembersRoom) return;
+    if (!managingMembersRoom || !user) return;
 
     const newRole = member.role === 'moderator' ? 'member' : 'moderator';
 
@@ -303,8 +345,8 @@ export default function DashboardPage() {
       if (error) throw error;
 
       await fetchRoomMembers(managingMembersRoom.id);
-    } catch (err: any) {
-      alert(err.message || 'Błąd zmiany uprawnień.');
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Błąd zmiany uprawnień.'));
     }
   };
 
@@ -313,15 +355,12 @@ export default function DashboardPage() {
     if (!confirm('Czy na pewno chcesz usunąć tego użytkownika z pokoju?')) return;
 
     try {
-      const { error } = await supabase
-        .from('room_members')
-        .delete()
-        .eq('id', memberId);
+      const { error } = await supabase.from('room_members').delete().eq('id', memberId);
 
       if (error) throw error;
       await fetchRoomMembers(managingMembersRoom.id);
-    } catch (err: any) {
-      alert(err.message || 'Błąd usuwania członka.');
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Błąd usuwania członka.'));
     }
   };
 
@@ -338,6 +377,7 @@ export default function DashboardPage() {
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) return;
     setProfileMsg('');
     setProfileError('');
 
@@ -365,20 +405,18 @@ export default function DashboardPage() {
         }
       }
 
-      const { error } = await supabase
-        .from('profiles')
-        .upsert({
-          id: user.id,
-          username: trimmedName,
-          avatar_url: newAvatarUrl.trim() || null,
-        });
+      const { error } = await supabase.from('profiles').upsert({
+        id: user.id,
+        username: trimmedName,
+        avatar_url: newAvatarUrl.trim() || null,
+      });
       if (error) throw error;
 
       setUsername(trimmedName);
       setAvatarUrl(newAvatarUrl.trim());
       setProfileMsg('Profil zaktualizowany.');
-    } catch (err: any) {
-      setProfileError(err.message || 'Błąd zapisu profilu.');
+    } catch (err: unknown) {
+      setProfileError(getErrorMessage(err, 'Błąd zapisu profilu.'));
     } finally {
       setSavingProfile(false);
     }
@@ -388,36 +426,39 @@ export default function DashboardPage() {
     const file = e.target.files?.[0];
     if (!file || !user) return;
 
-    setSavingProfile(true);
     setProfileError('');
     setProfileMsg('');
 
+    if (!file.type.startsWith('image/')) {
+      setProfileError('Wybrany plik musi być obrazem.');
+      return;
+    }
+
+    if (file.size > MAX_AVATAR_BYTES) {
+      setProfileError('Maksymalny rozmiar awatara to 2 MB.');
+      return;
+    }
+
+    setSavingProfile(true);
+
     try {
-      const fileExt = file.name.split('.').pop();
+      const fileExt = file.name.split('.').pop() || 'png';
       const filePath = `avatars/${user.id}-${Date.now()}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
         .upload(filePath, file, { upsert: true });
 
-      if (uploadError) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (event.target?.result) {
-            setNewAvatarUrl(event.target.result as string);
-          }
-        };
-        reader.readAsDataURL(file);
-      } else {
-        const { data: { publicUrl } } = supabase.storage
-          .from('avatars')
-          .getPublicUrl(filePath);
+      if (uploadError) throw uploadError;
 
-        setNewAvatarUrl(publicUrl);
-      }
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from('avatars').getPublicUrl(filePath);
+
+      setNewAvatarUrl(publicUrl);
       setProfileMsg('Wczytano awatar. Zapisz profil.');
-    } catch (err: any) {
-      setProfileError('Błąd wczytywania pliku.');
+    } catch (err: unknown) {
+      setProfileError(getErrorMessage(err, 'Nie udało się wysłać awatara.'));
     } finally {
       setSavingProfile(false);
     }
@@ -450,8 +491,8 @@ export default function DashboardPage() {
       setPasswordMsg('Hasło zmienione.');
       setNewPassword('');
       setConfirmPassword('');
-    } catch (err: any) {
-      setPasswordError(err.message || 'Błąd zmiany hasła.');
+    } catch (err: unknown) {
+      setPasswordError(getErrorMessage(err, 'Błąd zmiany hasła.'));
     } finally {
       setSavingPassword(false);
     }
@@ -479,9 +520,12 @@ export default function DashboardPage() {
           aria-label="Otwórz ustawienia konta"
         >
           {avatarUrl ? (
-            <img
+            <Image
               src={avatarUrl}
               alt=""
+              width={28}
+              height={28}
+              unoptimized
               className="size-7 rounded-full border border-line object-cover"
             />
           ) : (
@@ -538,7 +582,7 @@ export default function DashboardPage() {
                 type="checkbox"
                 checked={isPrivateNew}
                 onChange={(e) => setIsPrivateNew(e.target.checked)}
-                className="size-4 accent-lime rounded cursor-pointer"
+                className="size-4 cursor-pointer rounded accent-lime"
               />
             </div>
 
@@ -577,8 +621,7 @@ export default function DashboardPage() {
 
         <section>
           <h2 className="font-display text-4xl tracking-wide sm:text-5xl">
-            Dostępne pokoje{' '}
-            <span className="text-mute">({rooms.length})</span>
+            Dostępne pokoje <span className="text-mute">({rooms.length})</span>
           </h2>
 
           {rooms.length === 0 ? (
@@ -591,15 +634,12 @@ export default function DashboardPage() {
                 const isOwner = room.owner_id === user?.id;
                 const copied = copiedId === room.id;
                 return (
-                  <li
-                    key={room.id}
-                    className="flex items-center justify-between gap-3 py-3.5"
-                  >
+                  <li key={room.id} className="flex items-center justify-between gap-3 py-3.5">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="truncate font-semibold text-paper">{room.name}</p>
                         {room.is_private && (
-                          <span className="rounded bg-danger/20 border border-danger/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger font-mono">
+                          <span className="rounded border border-danger/40 bg-danger/20 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-danger">
                             Prywatny
                           </span>
                         )}
@@ -611,30 +651,40 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <button
-                        onClick={() => handleOpenMembersModal(room)}
-                        className="btn btn-ghost size-10 min-h-0 px-0"
-                        title="Zarządzaj członkami i rolami"
-                      >
-                        <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                        </svg>
-                      </button>
-
                       {isOwner && (
-                        <button
-                          onClick={() => handleOpenEditRoom(room)}
-                          className="btn btn-ghost size-10 min-h-0 px-0"
-                          title="Edytuj kanał i kod dostępu"
-                        >
-                          <Icon name="gear" className="size-4" />
-                        </button>
+                        <>
+                          <button
+                            onClick={() => handleOpenMembersModal(room)}
+                            className="btn btn-ghost size-10 min-h-0 px-0"
+                            title="Zarządzaj członkami i rolami"
+                            aria-label={`Zarządzaj członkami pokoju ${room.name}`}
+                          >
+                            <Icon name="users" className="size-4" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditRoom(room)}
+                            className="btn btn-ghost size-10 min-h-0 px-0"
+                            title="Edytuj kanał i kod dostępu"
+                            aria-label={`Edytuj pokój ${room.name}`}
+                          >
+                            <Icon name="gear" className="size-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRoom(room)}
+                            disabled={deletingRoomId === room.id}
+                            className="btn btn-danger size-10 min-h-0 px-0"
+                            title="Usuń pokój"
+                            aria-label={`Usuń pokój ${room.name}`}
+                          >
+                            <Icon name="trash" className="size-4" />
+                          </button>
+                        </>
                       )}
-
                       <button
                         onClick={() => handleCopyInvite(room)}
                         className="btn btn-ghost size-10 min-h-0 px-0"
                         title="Kopiuj link"
+                        aria-label={`Kopiuj link do pokoju ${room.name}`}
                       >
                         <Icon name={copied ? 'check' : 'link'} className="size-4" />
                       </button>
@@ -665,8 +715,10 @@ export default function DashboardPage() {
             onClick={() => setEditingRoom(null)}
           />
           <div className="relative z-10 w-full max-w-md rounded-xl border border-line bg-panel p-6 shadow-2xl">
-            <h3 className="font-display text-2xl tracking-wide mb-1">Edycja pokoju</h3>
-            <p className="text-sm text-mute mb-4">Zaktualizuj nazwę, opis oraz prywatność pokoju.</p>
+            <h3 className="font-display mb-1 text-2xl tracking-wide">Edycja pokoju</h3>
+            <p className="mb-4 text-sm text-mute">
+              Zaktualizuj nazwę, opis oraz prywatność pokoju.
+            </p>
 
             <form onSubmit={handleSaveRoomSettings} className="space-y-4">
               <div>
@@ -697,7 +749,7 @@ export default function DashboardPage() {
                   type="checkbox"
                   checked={editIsPrivate}
                   onChange={(e) => setEditIsPrivate(e.target.checked)}
-                  className="size-4 accent-lime rounded cursor-pointer"
+                  className="size-4 cursor-pointer rounded accent-lime"
                 />
               </div>
 
@@ -723,11 +775,7 @@ export default function DashboardPage() {
                 >
                   Anuluj
                 </button>
-                <button
-                  type="submit"
-                  disabled={savingRoom}
-                  className="btn btn-primary"
-                >
+                <button type="submit" disabled={savingRoom} className="btn btn-primary">
                   {savingRoom ? 'Zapisywanie...' : 'Zapisz zmiany'}
                 </button>
               </div>
@@ -742,14 +790,14 @@ export default function DashboardPage() {
             className="fixed inset-0 bg-ink/70 backdrop-blur-sm"
             onClick={() => setManagingMembersRoom(null)}
           />
-          <div className="relative z-10 w-full max-w-lg rounded-xl border border-line bg-panel p-6 shadow-2xl max-h-[90vh] flex flex-col justify-between overflow-hidden">
+          <div className="relative z-10 flex max-h-[90vh] w-full max-w-lg flex-col justify-between overflow-hidden rounded-xl border border-line bg-panel p-6 shadow-2xl">
             <div>
-              <div className="flex items-center justify-between border-b border-line pb-3 mb-4">
+              <div className="mb-4 flex items-center justify-between border-b border-line pb-3">
                 <div>
-                  <h3 className="font-display text-2xl tracking-wide">
-                    Uczestnicy pokoju
-                  </h3>
-                  <p className="text-xs text-mute font-mono">Pokój: #{managingMembersRoom.name}</p>
+                  <h3 className="font-display text-2xl tracking-wide">Uczestnicy pokoju</h3>
+                  <p className="font-mono text-xs text-mute">
+                    Pokój: #{managingMembersRoom.name}
+                  </p>
                 </div>
                 <button
                   onClick={() => setManagingMembersRoom(null)}
@@ -770,19 +818,22 @@ export default function DashboardPage() {
                     placeholder="Wpisz login użytkownika..."
                     className="field min-h-10 flex-1"
                   />
-                  <button type="submit" className="btn btn-primary min-h-10 px-4 text-xs uppercase font-semibold">
+                  <button
+                    type="submit"
+                    className="btn btn-primary min-h-10 px-4 text-xs font-semibold uppercase"
+                  >
                     Dodaj
                   </button>
                 </div>
 
                 {memberActionMsg && (
-                  <div className="flex items-center gap-1.5 text-xs text-lime font-mono">
+                  <div className="flex items-center gap-1.5 font-mono text-xs text-lime">
                     <Icon name="check" className="size-4 shrink-0" />
                     <span>{memberActionMsg}</span>
                   </div>
                 )}
                 {memberActionError && (
-                  <div className="flex items-center gap-1.5 text-xs text-danger font-mono">
+                  <div className="flex items-center gap-1.5 font-mono text-xs text-danger">
                     <Icon name="alert" className="size-4 shrink-0" />
                     <span>{memberActionError}</span>
                   </div>
@@ -792,41 +843,49 @@ export default function DashboardPage() {
               <div className="space-y-2">
                 <span className="label">Lista członków ({members.length})</span>
                 {loadingMembers ? (
-                  <p className="text-xs text-mute py-4 text-center">Ładowanie członków...</p>
+                  <p className="py-4 text-center text-xs text-mute">Ładowanie członków...</p>
                 ) : members.length === 0 ? (
-                  <p className="text-xs text-mute py-4 text-center">Brak dodanych członków.</p>
+                  <p className="py-4 text-center text-xs text-mute">Brak dodanych członków.</p>
                 ) : (
-                  <ul className="max-h-60 overflow-y-auto space-y-2 pr-1 divide-y divide-line/60">
+                  <ul className="max-h-60 divide-y divide-line/60 space-y-2 overflow-y-auto pr-1">
                     {members.map((member) => {
                       const isOwner = member.role === 'owner';
                       const isMod = member.role === 'moderator';
+                      const profile = Array.isArray(member.profiles)
+                        ? member.profiles[0]
+                        : member.profiles;
 
                       return (
                         <li key={member.id} className="flex items-center justify-between py-2.5">
                           <div className="flex items-center gap-3">
-                            {member.profiles?.avatar_url ? (
-                              <img
-                                src={member.profiles.avatar_url}
+                            {profile?.avatar_url ? (
+                              <Image
+                                src={profile.avatar_url}
                                 alt=""
+                                width={32}
+                                height={32}
+                                unoptimized
                                 className="size-8 rounded-full border border-line object-cover"
                               />
                             ) : (
-                              <div className="font-display flex size-8 items-center justify-center rounded-full bg-line text-xs uppercase font-bold">
-                                {(member.profiles?.username || 'U')[0]}
+                              <div className="font-display flex size-8 items-center justify-center rounded-full bg-line text-xs font-bold uppercase">
+                                {(profile?.username || 'U')[0]}
                               </div>
                             )}
 
                             <div>
                               <p className="text-sm font-semibold text-paper">
-                                {member.profiles?.username || 'Użytkownik'}
+                                {profile?.username || 'Użytkownik'}
                               </p>
-                              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border uppercase tracking-wider ${
-                                isOwner
-                                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                                  : isMod
-                                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
-                                  : 'bg-line/30 border-line text-mute'
-                              }`}>
+                              <span
+                                className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider ${
+                                  isOwner
+                                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                                    : isMod
+                                      ? 'border-blue-500/30 bg-blue-500/10 text-blue-400'
+                                      : 'border-line bg-line/30 text-mute'
+                                }`}
+                              >
                                 {member.role}
                               </span>
                             </div>
@@ -837,10 +896,10 @@ export default function DashboardPage() {
                               <button
                                 type="button"
                                 onClick={() => handleToggleModeratorRole(member)}
-                                className={`px-2 py-1 rounded text-[11px] font-mono border transition ${
+                                className={`rounded border px-2 py-1 font-mono text-[11px] transition ${
                                   isMod
-                                    ? 'bg-blue-950/60 border-blue-700 text-blue-300'
-                                    : 'bg-panel border-line text-mute hover:text-paper'
+                                    ? 'border-blue-700 bg-blue-950/60 text-blue-300'
+                                    : 'border-line bg-panel text-mute hover:text-paper'
                                 }`}
                                 title={isMod ? 'Odbierz moderatora' : 'Mianuj moderatorem'}
                               >
@@ -865,7 +924,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-line flex justify-end">
+            <div className="flex justify-end border-t border-line pt-4">
               <button
                 type="button"
                 onClick={() => setManagingMembersRoom(null)}
@@ -894,9 +953,7 @@ export default function DashboardPage() {
           >
             <div>
               <div className="mb-6 flex items-center justify-between border-b border-line pb-4">
-                <h2 className="font-display text-3xl tracking-wide">
-                  Ustawienia konta
-                </h2>
+                <h2 className="font-display text-3xl tracking-wide">Ustawienia konta</h2>
                 <button
                   onClick={() => setIsSettingsOpen(false)}
                   className="btn btn-ghost size-11 min-h-0 px-0"
@@ -910,14 +967,20 @@ export default function DashboardPage() {
                 <h3 className="text-lg font-semibold">Profil</h3>
 
                 {profileMsg && (
-                  <div role="status" className="flex items-center gap-2 rounded-md border border-lime/40 bg-lime/10 p-2.5 text-sm text-lime">
+                  <div
+                    role="status"
+                    className="flex items-center gap-2 rounded-md border border-lime/40 bg-lime/10 p-2.5 text-sm text-lime"
+                  >
                     <Icon name="check" className="size-4 shrink-0" />
                     <span>{profileMsg}</span>
                   </div>
                 )}
 
                 {profileError && (
-                  <div role="alert" className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 p-2.5 text-sm text-danger">
+                  <div
+                    role="alert"
+                    className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 p-2.5 text-sm text-danger"
+                  >
                     <Icon name="alert" className="size-4 shrink-0" />
                     <span>{profileError}</span>
                   </div>
@@ -928,9 +991,12 @@ export default function DashboardPage() {
                     <span className="label">Awatar</span>
                     <div className="flex items-center gap-3">
                       {newAvatarUrl ? (
-                        <img
+                        <Image
                           src={newAvatarUrl}
                           alt="Podgląd awatara"
+                          width={56}
+                          height={56}
+                          unoptimized
                           className="size-14 shrink-0 rounded-full border border-line object-cover"
                         />
                       ) : (
@@ -992,14 +1058,20 @@ export default function DashboardPage() {
                 <h3 className="text-lg font-semibold">Zmiana hasła</h3>
 
                 {passwordMsg && (
-                  <div role="status" className="flex items-center gap-2 rounded-md border border-lime/40 bg-lime/10 p-2.5 text-sm text-lime">
+                  <div
+                    role="status"
+                    className="flex items-center gap-2 rounded-md border border-lime/40 bg-lime/10 p-2.5 text-sm text-lime"
+                  >
                     <Icon name="check" className="size-4 shrink-0" />
                     <span>{passwordMsg}</span>
                   </div>
                 )}
 
                 {passwordError && (
-                  <div role="alert" className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 p-2.5 text-sm text-danger">
+                  <div
+                    role="alert"
+                    className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 p-2.5 text-sm text-danger"
+                  >
                     <Icon name="alert" className="size-4 shrink-0" />
                     <span>{passwordError}</span>
                   </div>

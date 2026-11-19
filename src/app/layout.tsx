@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Bebas_Neue, DM_Sans } from "next/font/google";
+import { PwaRegistrar } from "@/components/PwaRegistrar";
 import "./globals.css";
 
 const bebas = Bebas_Neue({
@@ -17,6 +18,11 @@ export const metadata: Metadata = {
   title: "CHATTER – rozmowy głosowe i wideo w przeglądarce",
   description:
     "Twórz pokoje, wysyłaj link i rozmawiaj głosem, obrazem i na czacie. Bez instalowania aplikacji.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "CHATTER",
+  },
 };
 
 export const viewport: Viewport = {
@@ -29,7 +35,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="pl"
       className={`${bebas.variable} ${dmSans.variable} antialiased`}
     >
-      <body className="font-body flex min-h-dvh flex-col">{children}</body>
+      <body className="font-body flex min-h-dvh flex-col">
+        <PwaRegistrar />
+        {children}
+      </body>
     </html>
   );
 }

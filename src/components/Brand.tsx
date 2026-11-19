@@ -1,7 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
 
-/** Znak + napis w nagłówkach. Napis składany fontem, więc zawsze ostry. */
 export function Brand({
   href = "/",
   compact = false,

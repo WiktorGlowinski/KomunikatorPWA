@@ -1,6 +1,5 @@
 import { Ticks } from "./Ticks";
 
-/** Ekran ładowania na całą stronę. */
 export function FullScreenLoader({ text }: { text: string }) {
   return (
     <div

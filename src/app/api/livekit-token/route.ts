@@ -3,13 +3,11 @@ import { AccessToken } from 'livekit-server-sdk';
 import { createClient } from '@supabase/supabase-js';
 
 export async function GET(req: NextRequest) {
-  // 1. Pokój
   const room = req.nextUrl.searchParams.get('room')?.trim();
   if (!room || room.length > 100) {
     return NextResponse.json({ error: 'Nieprawidłowa nazwa pokoju.' }, { status: 400 });
   }
 
-  // 2. Sesja użytkownika: token Supabase przychodzi w nagłówku Authorization
   const authHeader = req.headers.get('authorization') ?? '';
   const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
   if (!accessToken) {
@@ -30,13 +28,11 @@ export async function GET(req: NextRequest) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Supabase sprawdza podpis i ważność tokenu – nie da się podszyć pod kogoś innego
   const { data: { user }, error: authError } = await supabase.auth.getUser(accessToken);
   if (authError || !user) {
     return NextResponse.json({ error: 'Sesja wygasła. Zaloguj się ponownie.' }, { status: 401 });
   }
 
-  // 3. Nazwa pochodzi z bazy, nie z parametru w adresie
   const { data: profile } = await supabase
     .from('profiles')
     .select('username')
@@ -45,7 +41,11 @@ export async function GET(req: NextRequest) {
 
   const displayName = profile?.username || user.email?.split('@')[0] || 'Użytkownik';
 
-  // identity = ID konta (unikalne, nie do podrobienia), name = to, co widzą inni
+  const { data: roomInfo } = await supabase.rpc('room_info', { p_name: room });
+  if (!roomInfo?.exists || roomInfo.is_banned || !roomInfo.role) {
+    return NextResponse.json({ error: 'Brak dostępu do tego pokoju.' }, { status: 403 });
+  }
+
   const at = new AccessToken(apiKey, apiSecret, {
     identity: user.id,
     name: displayName,

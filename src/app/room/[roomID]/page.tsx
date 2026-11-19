@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { ComponentProps } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import type { User } from '@supabase/supabase-js';
 import {
   LiveKitRoom,
   useTracks,
@@ -14,37 +15,29 @@ import {
 } from '@livekit/components-react';
 import { Track, VideoPresets, type RoomOptions } from 'livekit-client';
 import { supabase } from '@/lib/supabaseClient';
+import {
+  getErrorMessage,
+  normalizeRole,
+  roleRank,
+  type BanRow,
+  type ChatMessage,
+  type LogRow,
+  type MemberRow,
+  type ProfileSummary,
+  type RoomInfo,
+  type RoomRole,
+} from '@/lib/types';
 import { Brand } from '@/components/Brand';
 import { Icon } from '@/components/Icon';
 import { Ticks } from '@/components/Ticks';
 import { FullScreenLoader } from '@/components/Spinner';
+import { ParticipantAvatar } from '@/components/ParticipantAvatar';
+import { RoleBadge } from '@/components/room/RoleBadge';
+import { ChatPanel } from '@/components/room/ChatPanel';
+import { MembersPanel } from '@/components/room/MembersPanel';
+import { StatsPanel } from '@/components/room/StatsPanel';
+import { useWebRTCStats } from '@/hooks/useWebRTCStats';
 
-interface ChatMessage {
-  id: string;
-  room_id: string;
-  sender_id: string;
-  content: string;
-  created_at: string;
-  profiles?: {
-    username: string;
-  };
-}
-
-interface WebRTCStats {
-  rtt: number | null;
-  jitter: number | null;
-  packetLossPercent: number | null;
-  bitrateInbound: number;
-  bitrateOutbound: number;
-  resolution: string | null;
-  fps: number | null;
-  audioCodec: string | null;
-  videoCodec: string | null;
-  transportState: string | null;
-}
-
-// maxBitrate to tylko SUFIT: przeglądarka sama obniża faktyczny bitrate,
-// gdy łącze nadawcy jest słabe.
 const SCREEN_PRESETS = {
   '1080p60': {
     capture: { width: 1920, height: 1080, frameRate: 60 },
@@ -66,15 +59,10 @@ const SCREEN_PRESETS = {
     encoding: { maxBitrate: 15_000_000, maxFramerate: 30 },
     label: '4K 30 FPS (Wysokie obciążenie)',
   },
-};
+} as const;
 
 type ScreenQualityKey = keyof typeof SCREEN_PRESETS;
 
-// Opcje pokoju trzymamy poza komponentem, żeby obiekt nie tworzył się przy każdym renderze.
-//  - simulcast + screenShareSimulcastLayers: nadawca wysyła obok pełnej jakości
-//    słabsze warstwy ekranu, a serwer dobiera każdemu odbiorcy warstwę do jego łącza
-//  - adaptiveStream: odbiorca dostaje jakość dopasowaną do rozmiaru kafelka i łącza
-//  - dynacast: nadawca nie wysyła warstw, których nikt nie ogląda
 const ROOM_OPTIONS: RoomOptions = {
   adaptiveStream: true,
   dynacast: true,
@@ -94,150 +82,18 @@ function peopleLabel(n: number) {
 
 const asRef = (t: unknown) => t as ComponentProps<typeof VideoTrack>['trackRef'];
 
-// ── Role w pokoju ───────────────────────────────────────────
-// owner = administrator (założyciel), moderator, member
-type RoomRole = 'owner' | 'moderator' | 'member';
-
-const ROLE_LABEL: Record<RoomRole, string> = {
-  owner: 'Administrator',
-  moderator: 'Moderator',
-  member: 'Członek',
-};
-
-const normalizeRole = (role?: string | null): RoomRole | null => {
-  if (!role) return null;
-  if (role === 'owner' || role === 'admin') return 'owner';
-  if (role === 'moderator') return 'moderator';
-  return 'member';
-};
-
-const roleRank = (role?: RoomRole | null) =>
-  role === 'owner' ? 3 : role === 'moderator' ? 2 : role === 'member' ? 1 : 0;
-
-/** compact = skrót do kafelków i czatu (zwykłych członków nie oznaczamy) */
-function RoleBadge({ role, compact = false }: { role: RoomRole; compact?: boolean }) {
-  if (compact && role === 'member') return null;
-  const style =
-    role === 'owner'
-      ? 'bg-lime text-ink'
-      : role === 'moderator'
-        ? 'border border-lime/60 text-lime'
-        : 'border border-line text-mute';
-  const text = compact ? (role === 'owner' ? 'Admin' : 'Mod') : ROLE_LABEL[role];
-  return (
-    <span
-      title={ROLE_LABEL[role]}
-      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold leading-none ${style}`}
-    >
-      {text}
-    </span>
-  );
-}
-
-interface RoomInfo {
-  exists: boolean;
-  id: string;
-  name: string;
-  description: string | null;
-  owner_id: string;
-  role: string | null;
-  is_banned: boolean;
-}
-
-interface MemberRow {
-  user_id: string;
-  role: RoomRole;
-  joined_at: string;
-  username: string;
-  avatar_url: string | null;
-}
-
-interface BanRow {
-  id: string;
-  user_id: string;
-  username: string;
-  reason: string | null;
-  banned_at: string;
-  banned_by_name: string | null;
-}
-
-interface LogRow {
-  id: string;
-  action_type: string;
-  reason: string | null;
-  created_at: string;
-  moderator_name: string;
-  target_name: string;
-}
-
-const LOG_LABEL: Record<string, string> = {
-  kick: 'Wyrzucenie z rozmowy',
-  ban: 'Blokada',
-  unban: 'Zdjęcie blokady',
-  remove_member: 'Usunięcie z pokoju',
-  role_change: 'Zmiana roli',
-};
-
-async function fetchProfiles(ids: string[]) {
+async function fetchProfiles(ids: string[]): Promise<Record<string, ProfileSummary>> {
   const unique = Array.from(new Set(ids.filter(Boolean)));
-  const map: Record<string, { username: string; avatar_url: string | null }> = {};
+  const map: Record<string, ProfileSummary> = {};
   if (unique.length === 0) return map;
-  const { data } = await supabase.from('profiles').select('id, username, avatar_url').in('id', unique);
-  (data ?? []).forEach((p: any) => {
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, username, avatar_url')
+    .in('id', unique);
+  (data ?? []).forEach((p) => {
     map[p.id] = { username: p.username || 'Użytkownik', avatar_url: p.avatar_url ?? null };
   });
   return map;
-}
-
-/** Awatar mówiącej osoby dostaje po lewej kreski dźwięku z logo (ticksClassName włącza je). */
-function ParticipantAvatar({
-  name,
-  url,
-  speaking,
-  className,
-  textClass,
-  ticksClassName,
-}: {
-  name: string;
-  url?: string | null;
-  speaking: boolean;
-  className: string;
-  textClass: string;
-  ticksClassName?: string;
-}) {
-  const [failed, setFailed] = useState(false);
-
-  const avatar =
-    url && !failed ? (
-      <img
-        src={url}
-        alt=""
-        onError={() => setFailed(true)}
-        className={`${className} rounded-full border border-line object-cover`}
-      />
-    ) : (
-      <div
-        className={`${className} ${textClass} font-display flex items-center justify-center rounded-full uppercase transition-colors ${
-          speaking ? 'bg-lime text-ink' : 'bg-line text-paper'
-        }`}
-      >
-        {name[0]}
-      </div>
-    );
-
-  if (!ticksClassName) return avatar;
-
-  return (
-    <div className="relative">
-      {speaking && (
-        <Ticks
-          active
-          className={`absolute right-full top-1/2 mr-0.5 -translate-y-1/2 text-lime ${ticksClassName}`}
-        />
-      )}
-      {avatar}
-    </div>
-  );
 }
 
 type Phase = 'loading' | 'noaccess' | 'banned' | 'error' | 'ready';
@@ -254,131 +110,138 @@ function Notice({ text, children }: { text: string; children?: React.ReactNode }
 function inviteErrorText(message?: string) {
   const m = message ?? '';
   if (m.includes('BANNED')) return 'Masz blokadę w tym pokoju.';
-  if (m.includes('INVALID_INVITE')) return 'Nieprawidłowy kod zaproszenia albo zaproszenia zostały wyłączone.';
+  if (m.includes('INVALID_INVITE'))
+    return 'Nieprawidłowy kod zaproszenia albo zaproszenia zostały wyłączone.';
   if (m.includes('NOT_AUTHENTICATED')) return 'Sesja wygasła. Zaloguj się ponownie.';
   return 'Nie udało się dołączyć do pokoju.';
 }
+
+const subscribeDesktopMedia = (cb: () => void) => {
+  const mql = window.matchMedia('(min-width: 768px)');
+  mql.addEventListener('change', cb);
+  return () => mql.removeEventListener('change', cb);
+};
+
+const getDesktopMediaSnapshot = () => window.matchMedia('(min-width: 768px)').matches;
+const getDesktopMediaServerSnapshot = () => false;
 
 export default function RoomPage() {
   const params = useParams();
   const router = useRouter();
 
-  const [roomId, setRoomId] = useState<string>('');
+  const roomId = useMemo(() => {
+    const paramVal = params?.roomID ?? params?.roomId ?? params?.id ?? params?.slug;
+    const rawString =
+      typeof paramVal === 'string' ? paramVal : Array.isArray(paramVal) ? paramVal[0] : '';
+    return rawString && rawString !== 'undefined' ? decodeURIComponent(rawString) : '';
+  }, [params]);
+
   const [token, setToken] = useState('');
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState('');
   const [info, setInfo] = useState<RoomInfo | null>(null);
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState('');
-
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState('');
   const [joining, setJoining] = useState(false);
 
-  useEffect(() => {
-    let paramVal = params?.roomId || params?.id || params?.slug;
-
-    if (!paramVal && typeof window !== 'undefined') {
-      const parts = window.location.pathname.split('/');
-      paramVal = parts[parts.length - 1];
-    }
-
-    const rawString = typeof paramVal === 'string' ? paramVal : Array.isArray(paramVal) ? paramVal[0] : '';
-    if (rawString && rawString !== 'undefined') {
-      setRoomId(decodeURIComponent(rawString));
-    }
-  }, [params]);
-
-  const fetchInfo = async (name: string): Promise<RoomInfo | null> => {
+  const fetchInfo = useCallback(async (name: string): Promise<RoomInfo | null> => {
     const { data } = await supabase.rpc('room_info', { p_name: name });
     return (data as RoomInfo) ?? null;
-  };
+  }, []);
 
-  // Token do rozmowy dostaje tylko członek bez blokady (sprawdza to serwer)
-  const loadToken = async (name: string) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`/api/livekit-token?room=${encodeURIComponent(name)}`, {
-        headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
-      });
-
-      if (res.status === 401) {
-        router.push('/login');
-        return;
-      }
-
-      const data = await res.json();
-      if (data.token) {
-        setToken(data.token);
-        setPhase('ready');
-      } else {
-        setError(data.error || 'Nie udało się dołączyć do pokoju.');
+  const loadToken = useCallback(
+    async (name: string) => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const res = await fetch(`/api/livekit-token?room=${encodeURIComponent(name)}`, {
+          headers: { Authorization: `Bearer ${session?.access_token ?? ''}` },
+        });
+        if (res.status === 401) {
+          router.push('/login');
+          return;
+        }
+        const data = (await res.json()) as { token?: string; error?: string };
+        if (data.token) {
+          setToken(data.token);
+          setPhase('ready');
+        } else {
+          setError(data.error || 'Nie udało się dołączyć do pokoju.');
+          setPhase('error');
+        }
+      } catch (err) {
+        console.error('Błąd pobierania tokenu:', err);
+        setError('Nie udało się połączyć z serwerem.');
         setPhase('error');
       }
-    } catch (err) {
-      console.error('Błąd pobierania tokenu:', err);
-      setError('Nie udało się połączyć z serwerem.');
-      setPhase('error');
-    }
-  };
+    },
+    [router]
+  );
 
-  // Wejście z kodem zaproszenia: osoba zostaje dopisana do członków pokoju
-  const joinWithCode = async (name: string, inviteCode: string) => {
-    const { error: joinError } = await supabase.rpc('join_room', { p_name: name, p_code: inviteCode });
-    if (joinError) return inviteErrorText(joinError.message);
-
-    const fresh = await fetchInfo(name);
-    if (!fresh?.exists) return 'Nie udało się dołączyć do pokoju.';
-    setInfo(fresh);
-    setPhase('loading');
-    await loadToken(name);
-    return '';
-  };
+  const joinWithCode = useCallback(
+    async (name: string, inviteCode: string) => {
+      const { error: joinError } = await supabase.rpc('join_room', {
+        p_name: name,
+        p_code: inviteCode,
+      });
+      if (joinError) return inviteErrorText(joinError.message);
+      const fresh = await fetchInfo(name);
+      if (!fresh?.exists) return 'Nie udało się dołączyć do pokoju.';
+      setInfo(fresh);
+      setPhase('loading');
+      await loadToken(name);
+      return '';
+    },
+    [fetchInfo, loadToken]
+  );
 
   useEffect(() => {
     if (!roomId) return;
 
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+      if (!authUser) {
         router.push('/login');
         return;
       }
-      setUser(user);
+      setUser(authUser);
 
       const { data: profile } = await supabase
         .from('profiles')
         .select('username')
-        .eq('id', user.id)
+        .eq('id', authUser.id)
         .maybeSingle();
-      setUsername(profile?.username || user.email?.split('@')[0] || 'Użytkownik');
+
+      setUsername(profile?.username || authUser.email?.split('@')[0] || 'Użytkownik');
 
       const current = await fetchInfo(roomId);
-
       if (current?.exists && current.is_banned) {
         setPhase('banned');
         return;
       }
-
       if (current?.exists && current.role) {
         setInfo(current);
         await loadToken(roomId);
         return;
       }
 
-      // Nie jesteś członkiem: jeśli link zawiera zaproszenie, próbujemy z nim wejść
       const invite = new URLSearchParams(window.location.search).get('invite');
       if (invite) {
         const message = await joinWithCode(roomId, invite);
         if (!message) return;
         setCodeError(message);
       }
+
       setPhase('noaccess');
     };
 
-    init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, router]);
+    void init();
+  }, [roomId, router, fetchInfo, loadToken, joinWithCode]);
 
   const handleSubmitCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -417,15 +280,19 @@ export default function RoomPage() {
     return (
       <div className="flex min-h-dvh flex-col items-center justify-center px-5">
         <div className="w-full max-w-sm">
-          <h1 className="font-display text-5xl leading-none tracking-wide">Ten pokój jest zamknięty</h1>
+          <h1 className="font-display text-5xl leading-none tracking-wide">
+            Ten pokój jest zamknięty
+          </h1>
           <p className="mt-4 leading-relaxed text-mute">
-            Nie należysz do tego pokoju albo on nie istnieje. Wejdziesz, jeśli administrator doda Cię po
-            nazwie użytkownika albo podasz kod zaproszenia.
+            Nie należysz do tego pokoju albo on nie istnieje. Wejdziesz, jeśli administrator doda
+            Cię po nazwie użytkownika albo podasz kod zaproszenia.
           </p>
 
           <form onSubmit={handleSubmitCode} className="mt-8 space-y-4">
             <div>
-              <label htmlFor="invite-code" className="label">Kod zaproszenia</label>
+              <label htmlFor="invite-code" className="label">
+                Kod zaproszenia
+              </label>
               <input
                 id="invite-code"
                 type="text"
@@ -435,13 +302,23 @@ export default function RoomPage() {
                 className="field"
               />
             </div>
-
-            {codeError && <p role="alert" className="text-sm text-danger">{codeError}</p>}
-
-            <button type="submit" disabled={joining || !code.trim()} className="btn btn-primary min-h-12 w-full">
+            {codeError && (
+              <p role="alert" className="text-sm text-danger">
+                {codeError}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={joining || !code.trim()}
+              className="btn btn-primary min-h-12 w-full"
+            >
               {joining ? 'Sprawdzanie...' : 'Wejdź do pokoju'}
             </button>
-            <button type="button" onClick={() => router.push('/dashboard')} className="btn btn-ghost w-full">
+            <button
+              type="button"
+              onClick={() => router.push('/dashboard')}
+              className="btn btn-ghost w-full"
+            >
               Wróć do panelu
             </button>
           </form>
@@ -450,7 +327,7 @@ export default function RoomPage() {
     );
   }
 
-  if (phase !== 'ready' || !token || !roomId || !info) {
+  if (phase !== 'ready' || !token || !roomId || !info || !user) {
     return <FullScreenLoader text="Łączenie z pokojem..." />;
   }
 
@@ -465,7 +342,6 @@ export default function RoomPage() {
       onError={(err) => {
         console.warn('LiveKit error / brak uprawnień:', err);
       }}
-      // Wyrzucenie z rozmowy przez moderatora kończy się powrotem do panelu
       onDisconnected={() => router.push('/dashboard')}
       className="h-dvh overflow-hidden bg-ink"
     >
@@ -482,7 +358,7 @@ function CustomRoomUI({
 }: {
   roomId: string;
   roomInfo: RoomInfo;
-  currentUser: any;
+  currentUser: User;
   username: string;
 }) {
   const router = useRouter();
@@ -490,17 +366,22 @@ function CustomRoomUI({
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
 
-  const [isMicOn, setIsMicOn] = useState(false);
-  const [isCamOn, setIsCamOn] = useState(false);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const isMicOn = localParticipant.isMicrophoneEnabled;
+  const isCamOn = localParticipant.isCameraEnabled;
+  const isScreenSharing = localParticipant.isScreenShareEnabled;
   const [screenQuality, setScreenQuality] = useState<ScreenQualityKey>('1080p60');
 
-  const [showSidePanel, setShowSidePanel] = useState(false);
+  const isDesktop = useSyncExternalStore(
+    subscribeDesktopMedia,
+    getDesktopMediaSnapshot,
+    getDesktopMediaServerSnapshot
+  );
+  const [sidePanelOverride, setSidePanelOverride] = useState<boolean | null>(null);
+  const showSidePanel = sidePanelOverride ?? isDesktop;
   const [activeSideTab, setActiveSideTab] = useState<'chat' | 'members' | 'stats'>('chat');
   const [copied, setCopied] = useState(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [newMessage, setNewMessage] = useState('');
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [bans, setBans] = useState<BanRow[]>([]);
   const [logs, setLogs] = useState<LogRow[]>([]);
@@ -508,26 +389,8 @@ function CustomRoomUI({
   const [panelNotice, setPanelNotice] = useState('');
   const [moderationBusy, setModerationBusy] = useState(false);
   const [addUsername, setAddUsername] = useState('');
-  const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  const [webrtcStats, setWebrtcStats] = useState<WebRTCStats>({
-    rtt: null,
-    jitter: null,
-    packetLossPercent: null,
-    bitrateInbound: 0,
-    bitrateOutbound: 0,
-    resolution: null,
-    fps: null,
-    audioCodec: null,
-    videoCodec: null,
-    transportState: null,
-  });
-
-  const prevStatsRef = useRef<{ bytesSent: number; bytesRecv: number; time: number }>({
-    bytesSent: 0,
-    bytesRecv: 0,
-    time: 0,
-  });
+  const webrtcStats = useWebRTCStats(room);
 
   const tracks = useTracks(
     [
@@ -549,22 +412,21 @@ function CustomRoomUI({
     }));
 
   const [avatars, setAvatars] = useState<Record<string, string>>({});
+  const [senderUsernames, setSenderUsernames] = useState<Record<string, string>>({});
+
   const idsKey = JSON.stringify(
     Array.from(
-      new Set(
-        [currentUser?.id, ...participants.map((p) => p.identity)].filter(Boolean) as string[]
-      )
+      new Set([currentUser.id, ...participants.map((p) => p.identity)].filter(Boolean))
     ).sort()
   );
 
   useEffect(() => {
-    const ids: string[] = JSON.parse(idsKey);
+    const ids = JSON.parse(idsKey) as string[];
     if (ids.length === 0) return;
-
     let cancelled = false;
     supabase
       .from('profiles')
-      .select('id, avatar_url')
+      .select('id, username, avatar_url')
       .in('id', ids)
       .then(({ data, error }) => {
         if (cancelled) return;
@@ -572,278 +434,178 @@ function CustomRoomUI({
           console.error('Błąd zapytania awatarów:', error.message);
           return;
         }
-        const map: Record<string, string> = {};
+        const avatarMap: Record<string, string> = {};
+        const nameMap: Record<string, string> = {};
         (data ?? []).forEach((row) => {
-          if (row.avatar_url) map[row.id] = row.avatar_url;
+          if (row.avatar_url) avatarMap[row.id] = row.avatar_url;
+          if (row.username) nameMap[row.id] = row.username;
         });
-        setAvatars(map);
+        setAvatars((prev) => ({ ...prev, ...avatarMap }));
+        setSenderUsernames((prev) => ({ ...prev, ...nameMap }));
       });
-
     return () => {
       cancelled = true;
     };
   }, [idsKey]);
 
-  useEffect(() => {
-    if (window.matchMedia('(min-width: 768px)').matches) {
-      setShowSidePanel(true);
-    }
-  }, []);
+  const loadMessages = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*, profiles:sender_id(username, avatar_url)')
+      .eq('room_id', roomInfo.id)
+      .order('created_at', { ascending: true });
 
-  useEffect(() => {
-    if (!room) return;
+    if (error || !data) return;
 
-    const interval = setInterval(async () => {
-      try {
-        let totalBytesSent = 0;
-        let totalBytesRecv = 0;
-        let packetsLostTotal = 0;
-        let packetsRecvTotal = 0;
-        let currentRtt: number | null = null;
-        let currentJitter: number | null = null;
-        let resStr: string | null = null;
-        let currentFps: number | null = null;
-        let aCodec: string | null = null;
-        let vCodec: string | null = null;
+    setMessages(data as ChatMessage[]);
 
-        const engine = (room as any).engine;
-        if (engine) {
-          if (typeof engine.rtt === 'number' && engine.rtt > 0) {
-            currentRtt = Math.round(engine.rtt);
-          } else if (typeof engine.client?.rtt === 'number' && engine.client.rtt > 0) {
-            currentRtt = Math.round(engine.client.rtt);
-          }
-        }
+    const senderIds = Array.from(
+      new Set(data.map((m) => m.sender_id as string).filter(Boolean))
+    );
 
-        const pcsSet = new Set<RTCPeerConnection>();
-        if (engine?.publisher?.pc) pcsSet.add(engine.publisher.pc);
-        if (engine?.publisher?.peerConnection) pcsSet.add(engine.publisher.peerConnection);
-        if (engine?.subscriber?.pc) pcsSet.add(engine.subscriber.pc);
-        if (engine?.subscriber?.peerConnection) pcsSet.add(engine.subscriber.peerConnection);
-
-        const reports: RTCStatsReport[] = [];
-
-        for (const pc of pcsSet) {
-          if (pc && typeof pc.getStats === 'function') {
-            try {
-              const s = await pc.getStats();
-              reports.push(s);
-            } catch {}
-          }
-        }
-
-        const allTrackPubs = [
-          ...Array.from(room.localParticipant.trackPublications.values()),
-          ...Array.from(room.remoteParticipants.values()).flatMap((p) =>
-            Array.from(p.trackPublications.values())
-          ),
-        ];
-
-        for (const pub of allTrackPubs) {
-          if (pub.track && typeof (pub.track as any).getRTCStatsReport === 'function') {
-            try {
-              const rep = await (pub.track as any).getRTCStatsReport();
-              if (rep) reports.push(rep);
-            } catch {}
-          }
-        }
-
-        for (const stats of reports) {
-          stats.forEach((report) => {
-            if (report.type === 'outbound-rtp') {
-              if (typeof report.bytesSent === 'number') {
-                totalBytesSent += report.bytesSent;
-              }
-              const w = report.frameWidth || report.width;
-              const h = report.frameHeight || report.height;
-              if (w && h) resStr = `${w}x${h}`;
-              if (typeof report.framesPerSecond === 'number' && report.framesPerSecond > 0) {
-                currentFps = Math.round(report.framesPerSecond);
-              }
-            }
-
-            if (report.type === 'inbound-rtp') {
-              if (typeof report.bytesReceived === 'number') {
-                totalBytesRecv += report.bytesReceived;
-              }
-              if (typeof report.packetsLost === 'number') {
-                packetsLostTotal += report.packetsLost;
-              }
-              if (typeof report.packetsReceived === 'number') {
-                packetsRecvTotal += report.packetsReceived;
-              }
-              if (typeof report.jitter === 'number') {
-                currentJitter = Math.round(report.jitter * 1000);
-              }
-              const w = report.frameWidth || report.width;
-              const h = report.frameHeight || report.height;
-              if (w && h) resStr = `${w}x${h}`;
-              if (typeof report.framesPerSecond === 'number' && report.framesPerSecond > 0) {
-                currentFps = Math.round(report.framesPerSecond);
-              }
-            }
-
-            if (report.type === 'remote-inbound-rtp') {
-              if (typeof report.roundTripTime === 'number' && report.roundTripTime > 0) {
-                currentRtt = Math.round(report.roundTripTime * 1000);
-              }
-              if (typeof report.jitter === 'number') {
-                currentJitter = Math.round(report.jitter * 1000);
-              }
-              if (typeof report.packetsLost === 'number') {
-                packetsLostTotal += report.packetsLost;
-              }
-            }
-
-            if (report.type === 'candidate-pair' && (report.state === 'succeeded' || report.nominated)) {
-              if (typeof report.currentRoundTripTime === 'number' && report.currentRoundTripTime > 0) {
-                currentRtt = Math.round(report.currentRoundTripTime * 1000);
-              }
-            }
-
-            if (report.type === 'media-source' && (report.width || report.frameWidth)) {
-              const w = report.width || report.frameWidth;
-              const h = report.height || report.frameHeight;
-              if (w && h) resStr = `${w}x${h}`;
-              if (typeof report.framesPerSecond === 'number' && report.framesPerSecond > 0) {
-                currentFps = Math.round(report.framesPerSecond);
-              }
-            }
-
-            if (report.type === 'codec' && report.mimeType) {
-              const mime = report.mimeType.toLowerCase();
-              if (mime.startsWith('audio/')) aCodec = report.mimeType;
-              if (mime.startsWith('video/')) vCodec = report.mimeType;
-            }
-          });
-        }
-
-        if (!resStr || !currentFps) {
-          const allMediaTracks: MediaStreamTrack[] = [];
-          room.localParticipant.trackPublications.forEach((pub) => {
-            if (pub.track?.mediaStreamTrack) allMediaTracks.push(pub.track.mediaStreamTrack);
-          });
-          room.remoteParticipants.forEach((p) => {
-            p.trackPublications.forEach((pub) => {
-              if (pub.track?.mediaStreamTrack) allMediaTracks.push(pub.track.mediaStreamTrack);
-            });
-          });
-
-          for (const mst of allMediaTracks) {
-            if (mst.kind === 'video') {
-              const settings = mst.getSettings();
-              if (!resStr && settings.width && settings.height) {
-                resStr = `${settings.width}x${settings.height}`;
-              }
-              if (!currentFps && settings.frameRate) {
-                currentFps = Math.round(settings.frameRate);
-              }
-            }
-          }
-        }
-
-        const now = Date.now();
-        let bitOut = 0;
-        let bitIn = 0;
-
-        if (prevStatsRef.current.time > 0) {
-          const deltaSec = (now - prevStatsRef.current.time) / 1000;
-          if (deltaSec > 0) {
-            const sentDiff = totalBytesSent - prevStatsRef.current.bytesSent;
-            const recvDiff = totalBytesRecv - prevStatsRef.current.bytesRecv;
-            if (sentDiff > 0) {
-              bitOut = Math.round((sentDiff * 8) / deltaSec / 1000);
-            }
-            if (recvDiff > 0) {
-              bitIn = Math.round((recvDiff * 8) / deltaSec / 1000);
-            }
-          }
-        }
-
-        prevStatsRef.current = {
-          bytesSent: totalBytesSent,
-          bytesRecv: totalBytesRecv,
-          time: now,
-        };
-
-        const totalPackets = packetsRecvTotal + packetsLostTotal;
-        const lossRate = totalPackets > 0 ? Number(((packetsLostTotal / totalPackets) * 100).toFixed(2)) : 0;
-
-        const hasAudio = room.localParticipant.isMicrophoneEnabled || Array.from(room.remoteParticipants.values()).some(p => p.isMicrophoneEnabled);
-        const hasVideo = room.localParticipant.isCameraEnabled || room.localParticipant.isScreenShareEnabled || Array.from(room.remoteParticipants.values()).some(p => p.isCameraEnabled || p.isScreenShareEnabled);
-
-        setWebrtcStats({
-          rtt: currentRtt,
-          jitter: currentJitter,
-          packetLossPercent: lossRate,
-          bitrateInbound: bitIn,
-          bitrateOutbound: bitOut,
-          resolution: resStr,
-          fps: currentFps,
-          audioCodec: hasAudio ? (aCodec || 'audio/opus') : null,
-          videoCodec: hasVideo ? (vCodec || 'video/VP8') : null,
-          transportState: room.state,
+    if (senderIds.length > 0) {
+      const profilesMap = await fetchProfiles(senderIds);
+      setSenderUsernames((prev) => {
+        const next = { ...prev };
+        Object.entries(profilesMap).forEach(([id, info]) => {
+          next[id] = info.username;
         });
-      } catch (err) {
-        console.error('Błąd odczytu parametrów WebRTC:', err);
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [room]);
-
-  // Wiadomości pokoju (dostęp ogranicza baza: tylko członkowie bez blokady)
-  useEffect(() => {
-    const fetchMsgs = async () => {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*, profiles:sender_id(username)')
-        .eq('room_id', roomInfo.id)
-        .order('created_at', { ascending: true });
-
-      if (!error && data) {
-        setMessages(data as any);
-      }
-    };
-
-    fetchMsgs();
-    const interval = setInterval(fetchMsgs, 3000);
-    return () => clearInterval(interval);
+        return next;
+      });
+      setAvatars((prev) => {
+        const next = { ...prev };
+        Object.entries(profilesMap).forEach(([id, info]) => {
+          if (info.avatar_url) next[id] = info.avatar_url;
+        });
+        return next;
+      });
+    }
   }, [roomInfo.id]);
 
-  // ── Członkowie i moderacja ────────────────────────────────
-  // Każdy, kto wszedł do pokoju, jest zapisany na liście członków (także po wyjściu z rozmowy).
+  useEffect(() => {
+    let active = true;
+    const syncInitial = async () => {
+      if (active) await loadMessages();
+    };
+    void syncInitial();
+
+    const channel = supabase
+      .channel(`room-messages:${roomInfo.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `room_id=eq.${roomInfo.id}`,
+        },
+        async (payload) => {
+          const inserted = payload.new as ChatMessage;
+          const profilesMap = await fetchProfiles([inserted.sender_id]);
+          const senderProfile = profilesMap[inserted.sender_id];
+          if (senderProfile) {
+            setSenderUsernames((prev) => ({
+              ...prev,
+              [inserted.sender_id]: senderProfile.username,
+            }));
+            if (senderProfile.avatar_url) {
+              setAvatars((prev) => ({
+                ...prev,
+                [inserted.sender_id]: senderProfile.avatar_url as string,
+              }));
+            }
+          }
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === inserted.id)) return prev;
+            return [
+              ...prev,
+              {
+                ...inserted,
+                profiles: senderProfile ?? null,
+              },
+            ];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [roomInfo.id, loadMessages]);
+
   const loadMembers = useCallback(async () => {
     const { data, error } = await supabase
       .from('room_members')
       .select('user_id, role, joined_at')
       .eq('room_id', roomInfo.id);
     if (error || !data) return;
-
-    const profiles = await fetchProfiles(data.map((m: any) => m.user_id));
+    const profiles = await fetchProfiles(data.map((m) => m.user_id as string));
     setMembers(
-      data.map((m: any) => ({
-        user_id: m.user_id,
-        role: normalizeRole(m.role) ?? 'member',
-        joined_at: m.joined_at,
-        username: profiles[m.user_id]?.username || 'Użytkownik',
-        avatar_url: profiles[m.user_id]?.avatar_url ?? null,
+      data.map((m) => ({
+        user_id: m.user_id as string,
+        role: normalizeRole(m.role as string | null) ?? 'member',
+        joined_at: m.joined_at as string,
+        username: profiles[m.user_id as string]?.username || 'Użytkownik',
+        avatar_url: profiles[m.user_id as string]?.avatar_url ?? null,
       }))
     );
+    setSenderUsernames((prev) => {
+      const next = { ...prev };
+      Object.entries(profiles).forEach(([id, info]) => {
+        next[id] = info.username;
+      });
+      return next;
+    });
+    setAvatars((prev) => {
+      const next = { ...prev };
+      Object.entries(profiles).forEach(([id, info]) => {
+        if (info.avatar_url) next[id] = info.avatar_url;
+      });
+      return next;
+    });
   }, [roomInfo.id]);
 
-  const roleById: Record<string, RoomRole> = {};
-  members.forEach((m) => {
-    roleById[m.user_id] = m.role;
-  });
-  const myRole: RoomRole = roleById[currentUser?.id] ?? normalizeRole(roomInfo.role) ?? 'member';
+  const roleById = useMemo(() => {
+    const map: Record<string, RoomRole> = {};
+    members.forEach((m) => {
+      map[m.user_id] = m.role;
+    });
+    return map;
+  }, [members]);
+
+  const myRole: RoomRole = roleById[currentUser.id] ?? normalizeRole(roomInfo.role) ?? 'member';
   const myRank = roleRank(myRole);
 
   useEffect(() => {
-    loadMembers();
-    const interval = setInterval(loadMembers, 8000);
-    return () => clearInterval(interval);
-  }, [loadMembers, idsKey]);
+    let active = true;
+    const syncInitial = async () => {
+      if (active) await loadMembers();
+    };
+    void syncInitial();
+
+    const channel = supabase
+      .channel(`room-members:${roomInfo.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'room_members',
+          filter: `room_id=eq.${roomInfo.id}`,
+        },
+        () => {
+          void loadMembers();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [roomInfo.id, loadMembers, idsKey]);
 
   const loadModeration = useCallback(async () => {
     const [{ data: banData }, { data: logData }] = await Promise.all([
@@ -859,103 +621,167 @@ function CustomRoomUI({
         .order('created_at', { ascending: false })
         .limit(15),
     ]);
-
     const ids = [
-      ...(banData ?? []).flatMap((b: any) => [b.user_id, b.banned_by]),
-      ...(logData ?? []).flatMap((l: any) => [l.moderator_id, l.target_user_id]),
+      ...(banData ?? []).flatMap((b) => [b.user_id as string, b.banned_by as string]),
+      ...(logData ?? []).flatMap((l) => [l.moderator_id as string, l.target_user_id as string]),
     ];
     const profiles = await fetchProfiles(ids);
-
     setBans(
-      (banData ?? []).map((b: any) => ({
-        id: b.id,
-        user_id: b.user_id,
-        username: profiles[b.user_id]?.username || 'Użytkownik',
-        reason: b.reason,
-        banned_at: b.banned_at,
-        banned_by_name: profiles[b.banned_by]?.username ?? null,
+      (banData ?? []).map((b) => ({
+        id: b.id as string,
+        user_id: b.user_id as string,
+        username: profiles[b.user_id as string]?.username || 'Użytkownik',
+        reason: (b.reason as string | null) ?? null,
+        banned_at: b.banned_at as string,
+        banned_by_name: profiles[b.banned_by as string]?.username ?? null,
       }))
     );
     setLogs(
-      (logData ?? []).map((l: any) => ({
-        id: l.id,
+      (logData ?? []).map((l) => ({
+        id: l.id as string,
         action_type: String(l.action_type),
-        reason: l.reason,
-        created_at: l.created_at,
-        moderator_name: profiles[l.moderator_id]?.username || 'Użytkownik',
-        target_name: profiles[l.target_user_id]?.username || 'Użytkownik',
+        reason: (l.reason as string | null) ?? null,
+        created_at: l.created_at as string,
+        moderator_name: profiles[l.moderator_id as string]?.username || 'Użytkownik',
+        target_name: profiles[l.target_user_id as string]?.username || 'Użytkownik',
       }))
     );
   }, [roomInfo.id]);
 
   useEffect(() => {
     if (myRank < 2 || !showSidePanel || activeSideTab !== 'members') return;
-    loadModeration();
-    const interval = setInterval(loadModeration, 8000);
-    return () => clearInterval(interval);
-  }, [myRank, showSidePanel, activeSideTab, loadModeration]);
+    let active = true;
+    const syncInitial = async () => {
+      if (active) await loadModeration();
+    };
+    void syncInitial();
 
-  useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    const channel = supabase
+      .channel(`room-moderation:${roomInfo.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'room_bans',
+          filter: `room_id=eq.${roomInfo.id}`,
+        },
+        () => {
+          void loadModeration();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'moderation_logs',
+          filter: `room_id=eq.${roomInfo.id}`,
+        },
+        () => {
+          void loadModeration();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [myRank, showSidePanel, activeSideTab, roomInfo.id, loadModeration]);
+
+  const resolvedUsernames = useMemo(() => {
+    const map: Record<string, string> = { ...senderUsernames };
+    members.forEach((m) => {
+      if (m.username) map[m.user_id] = m.username;
+    });
+    participants.forEach((p) => {
+      if (p.name && !map[p.identity]) {
+        map[p.identity] = p.name;
+      }
+    });
+    if (currentUser.id && username) {
+      map[currentUser.id] = username;
     }
-  }, [messages, showSidePanel, activeSideTab]);
+    return map;
+  }, [senderUsernames, members, participants, currentUser.id, username]);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const resolvedAvatars = useMemo(() => {
+    const map: Record<string, string | null> = { ...avatars };
+    members.forEach((m) => {
+      if (m.avatar_url) map[m.user_id] = m.avatar_url;
+    });
+    return map;
+  }, [avatars, members]);
 
-    const content = newMessage.trim();
-    if (!content) return;
+  const mentionableUsers = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { id: string; username: string; avatar_url: string | null }[] = [];
 
-    if (!currentUser?.id) {
-      alert('Błąd: Brak zidentyfikowanej sesji użytkownika.');
-      return;
-    }
+    members.forEach((m) => {
+      if (!seen.has(m.user_id) && m.username) {
+        seen.add(m.user_id);
+        list.push({
+          id: m.user_id,
+          username: m.username,
+          avatar_url: m.avatar_url ?? resolvedAvatars[m.user_id] ?? null,
+        });
+      }
+    });
 
-    setNewMessage('');
+    participants.forEach((p) => {
+      const name = p.name || resolvedUsernames[p.identity];
+      if (!seen.has(p.identity) && name) {
+        seen.add(p.identity);
+        list.push({
+          id: p.identity,
+          username: name,
+          avatar_url: resolvedAvatars[p.identity] ?? null,
+        });
+      }
+    });
 
+    return list.sort((a, b) => a.username.localeCompare(b.username));
+  }, [members, participants, resolvedUsernames, resolvedAvatars]);
+
+  const handleSendMessage = async (content: string) => {
     const { data, error } = await supabase
       .from('messages')
       .insert([
         {
           room_id: roomInfo.id,
           sender_id: currentUser.id,
-          content: content,
+          content,
         },
       ])
-      .select('*, profiles:sender_id(username)')
+      .select('*, profiles:sender_id(username, avatar_url)')
       .single();
 
     if (error) {
       console.error('Błąd zapisu wiadomości w Supabase:', error);
       alert(`Błąd wysyłania wiadomości: ${error.message}`);
-      return;
+      return false;
     }
 
     if (data) {
       setMessages((prev) => {
         if (prev.some((m) => m.id === data.id)) return prev;
-        return [...prev, data as any];
+        return [...prev, data as ChatMessage];
       });
     }
+    return true;
   };
 
   const toggleMic = async () => {
-    const nextState = !isMicOn;
-    await localParticipant.setMicrophoneEnabled(nextState);
-    setIsMicOn(nextState);
+    await localParticipant.setMicrophoneEnabled(!isMicOn);
   };
 
   const toggleCam = async () => {
-    const nextState = !isCamOn;
-    await localParticipant.setCameraEnabled(nextState);
-    setIsCamOn(nextState);
+    await localParticipant.setCameraEnabled(!isCamOn);
   };
 
   const toggleScreenShare = async () => {
-    const nextState = !isScreenSharing;
-
-    if (nextState) {
+    if (!isScreenSharing) {
       const selected = SCREEN_PRESETS[screenQuality];
       const publication = await localParticipant.setScreenShareEnabled(
         true,
@@ -964,23 +790,19 @@ function CustomRoomUI({
           resolution: selected.capture,
         },
         {
-          // Dla ekranu LiveKit czyta screenShareEncoding (videoEncoding dotyczy tylko kamery)
           screenShareEncoding: selected.encoding,
           simulcast: true,
         }
       );
-
       if (publication?.track?.mediaStreamTrack) {
         const track = publication.track.mediaStreamTrack;
         if ('contentHint' in track) {
-          (track as any).contentHint = 'motion';
+          track.contentHint = 'motion';
         }
       }
     } else {
       await localParticipant.setScreenShareEnabled(false);
     }
-
-    setIsScreenSharing(nextState);
   };
 
   const handleLeaveRoom = async () => {
@@ -988,22 +810,23 @@ function CustomRoomUI({
     router.push('/dashboard');
   };
 
-  // Link zaproszenia zawiera kod, więc wejście z niego dopisuje osobę do członków pokoju
   const handleCopyInvite = async () => {
     setPanelError('');
     setPanelNotice('');
-    const { data } = await supabase.from('rooms').select('access_code').eq('id', roomInfo.id).maybeSingle();
-    const inviteCode = (data as any)?.access_code as string | null | undefined;
-
+    const { data } = await supabase
+      .from('rooms')
+      .select('access_code')
+      .eq('id', roomInfo.id)
+      .maybeSingle();
+    const inviteCode = data?.access_code as string | null | undefined;
     if (!inviteCode) {
-      setShowSidePanel(true);
+      setSidePanelOverride(true);
       setActiveSideTab('members');
       setPanelNotice(
         'Kod zaproszenia nie jest ustawiony. Ustaw go w panelu pokoju albo dodaj osoby po nazwie użytkownika.'
       );
       return;
     }
-
     const inviteLink = `${window.location.origin}/room/${roomInfo.name}?invite=${encodeURIComponent(inviteCode)}`;
     try {
       await navigator.clipboard.writeText(inviteLink);
@@ -1015,7 +838,6 @@ function CustomRoomUI({
   };
 
   const logAction = async (action: string, targetId: string, reason?: string | null) => {
-    // Błąd dziennika nie blokuje akcji moderacyjnej
     await supabase.from('moderation_logs').insert({
       room_id: roomInfo.id,
       moderator_id: currentUser.id,
@@ -1025,10 +847,11 @@ function CustomRoomUI({
     });
   };
 
-  // Samo usunięcie z bazy nie rozłączy osoby z trwającej rozmowy, robi to serwer
   const kickFromCall = async (userId: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       await fetch('/api/room-admin', {
         method: 'POST',
         headers: {
@@ -1037,9 +860,7 @@ function CustomRoomUI({
         },
         body: JSON.stringify({ room: roomInfo.name, userId }),
       });
-    } catch {
-      /* osoby mogło nie być w rozmowie */
-    }
+    } catch {}
   };
 
   const runModeration = async (action: () => Promise<void>, okText: string) => {
@@ -1049,8 +870,8 @@ function CustomRoomUI({
     try {
       await action();
       setPanelNotice(okText);
-    } catch (e: any) {
-      setPanelError(e?.message || 'Nie udało się wykonać operacji.');
+    } catch (err: unknown) {
+      setPanelError(getErrorMessage(err, 'Nie udało się wykonać operacji.'));
     } finally {
       setModerationBusy(false);
     }
@@ -1060,7 +881,7 @@ function CustomRoomUI({
     e.preventDefault();
     const target = addUsername.trim();
     if (!target) return;
-    runModeration(async () => {
+    void runModeration(async () => {
       const { data: profile } = await supabase
         .from('profiles')
         .select('id, username')
@@ -1084,21 +905,26 @@ function CustomRoomUI({
 
   const handleToggleMod = (m: MemberRow) => {
     const nextRole = m.role === 'moderator' ? 'member' : 'moderator';
-    runModeration(async () => {
-      const { error } = await supabase
-        .from('room_members')
-        .update({ role: nextRole, granted_by: currentUser.id })
-        .eq('room_id', roomInfo.id)
-        .eq('user_id', m.user_id);
-      if (error) throw error;
-      await logAction('role_change', m.user_id, nextRole);
-      await loadMembers();
-      await loadModeration();
-    }, nextRole === 'moderator' ? `${m.username} jest teraz moderatorem.` : `${m.username} nie jest już moderatorem.`);
+    void runModeration(
+      async () => {
+        const { error } = await supabase
+          .from('room_members')
+          .update({ role: nextRole, granted_by: currentUser.id })
+          .eq('room_id', roomInfo.id)
+          .eq('user_id', m.user_id);
+        if (error) throw error;
+        await logAction('role_change', m.user_id, nextRole);
+        await loadMembers();
+        await loadModeration();
+      },
+      nextRole === 'moderator'
+        ? `${m.username} jest teraz moderatorem.`
+        : `${m.username} nie jest już moderatorem.`
+    );
   };
 
   const handleKick = (m: MemberRow) => {
-    runModeration(async () => {
+    void runModeration(async () => {
       await kickFromCall(m.user_id);
       await logAction('kick', m.user_id);
       await loadModeration();
@@ -1106,8 +932,13 @@ function CustomRoomUI({
   };
 
   const handleRemoveMember = (m: MemberRow) => {
-    if (!window.confirm(`Usunąć ${m.username} z pokoju? Żeby wrócić, będzie musiał zostać dodany albo użyć kodu.`)) return;
-    runModeration(async () => {
+    if (
+      !window.confirm(
+        `Usunąć ${m.username} z pokoju? Żeby wrócić, będzie musiał zostać dodany albo użyć kodu.`
+      )
+    )
+      return;
+    void runModeration(async () => {
       const { error } = await supabase
         .from('room_members')
         .delete()
@@ -1124,7 +955,7 @@ function CustomRoomUI({
   const handleBan = (m: MemberRow) => {
     const reason = window.prompt(`Powód blokady ${m.username} (opcjonalnie):`);
     if (reason === null) return;
-    runModeration(async () => {
+    void runModeration(async () => {
       const { error: banError } = await supabase.from('room_bans').insert({
         room_id: roomInfo.id,
         user_id: m.user_id,
@@ -1132,8 +963,11 @@ function CustomRoomUI({
         reason: reason.trim() || null,
       });
       if (banError) throw banError;
-
-      await supabase.from('room_members').delete().eq('room_id', roomInfo.id).eq('user_id', m.user_id);
+      await supabase
+        .from('room_members')
+        .delete()
+        .eq('room_id', roomInfo.id)
+        .eq('user_id', m.user_id);
       await logAction('ban', m.user_id, reason.trim() || null);
       await kickFromCall(m.user_id);
       await loadMembers();
@@ -1142,17 +976,13 @@ function CustomRoomUI({
   };
 
   const handleUnban = (b: BanRow) => {
-    runModeration(async () => {
+    void runModeration(async () => {
       const { error } = await supabase.from('room_bans').delete().eq('id', b.id);
       if (error) throw error;
       await logAction('unban', b.user_id);
       await loadModeration();
-    }, `Zdjęto blokadę: ${b.username}. Żeby wrócił, musi zostać dodany lub użyć kodu.`);
+    }, `Zdjęto blokadę: ${b.username}. Żeby wrócić, musi zostać dodany lub użyć kodu.`);
   };
-
-  const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('pl-PL');
-  const fmtDateTime = (iso: string) =>
-    new Date(iso).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' });
 
   const onlineIds = new Set(participants.map((p) => p.identity));
   const sortedMembers = [...members].sort(
@@ -1160,86 +990,6 @@ function CustomRoomUI({
   );
   const onlineMembers = sortedMembers.filter((m) => onlineIds.has(m.user_id));
   const offlineMembers = sortedMembers.filter((m) => !onlineIds.has(m.user_id));
-
-  const renderMember = (m: MemberRow, online: boolean) => {
-    const p = participants.find((x) => x.identity === m.user_id);
-    const isMe = m.user_id === currentUser?.id;
-    const lower = roleRank(m.role) < myRank;
-    const canModerate = myRank >= 2 && lower && !isMe;
-    const canToggleMod = myRank >= 3 && m.role !== 'owner' && !isMe;
-
-    return (
-      <li key={m.user_id} className="py-2.5">
-        <div className="flex items-center gap-3">
-          <ParticipantAvatar
-            name={m.username}
-            url={m.avatar_url ?? avatars[m.user_id]}
-            speaking={!!p?.isSpeaking}
-            className="size-9 shrink-0"
-            textClass="text-sm"
-          />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-paper">
-              {m.username}{' '}
-              {isMe && <span className="text-xs font-normal text-mute">(Ty)</span>}
-            </p>
-            <div className="mt-0.5 flex items-center gap-2">
-              <RoleBadge role={m.role} />
-              {!online && <span className="text-[11px] text-mute">od {fmtDate(m.joined_at)}</span>}
-            </div>
-          </div>
-          {p?.isSpeaking && <Ticks active className="size-5 shrink-0 text-lime" />}
-          {online && (
-            <Icon
-              name={p?.isMicrophoneEnabled ? 'mic' : 'micOff'}
-              className={`size-4 shrink-0 ${p?.isMicrophoneEnabled ? 'text-mute' : 'text-danger'}`}
-            />
-          )}
-        </div>
-
-        {(canModerate || canToggleMod) && (
-          <div className="mt-2 flex flex-wrap gap-1.5 pl-12">
-            {canToggleMod && (
-              <button
-                onClick={() => handleToggleMod(m)}
-                disabled={moderationBusy}
-                className="btn btn-ghost min-h-8 px-2.5 text-xs"
-              >
-                {m.role === 'moderator' ? 'Odbierz moderatora' : 'Mianuj moderatorem'}
-              </button>
-            )}
-            {canModerate && online && (
-              <button
-                onClick={() => handleKick(m)}
-                disabled={moderationBusy}
-                className="btn btn-ghost min-h-8 px-2.5 text-xs"
-              >
-                Wyrzuć z rozmowy
-              </button>
-            )}
-            {canModerate && (
-              <button
-                onClick={() => handleRemoveMember(m)}
-                disabled={moderationBusy}
-                className="btn btn-ghost min-h-8 px-2.5 text-xs"
-              >
-                Usuń z pokoju
-              </button>
-            )}
-            {canModerate && (
-              <button
-                onClick={() => handleBan(m)}
-                disabled={moderationBusy}
-                className="btn btn-danger min-h-8 px-2.5 text-xs"
-              >
-                Zablokuj
-              </button>
-            )}
-          </div>
-        )}
-      </li>
-    );
-  };
 
   const getGridLayoutClass = (count: number) => {
     if (count === 1) return 'grid-cols-1 grid-rows-1 max-w-5xl max-h-[85vh]';
@@ -1260,37 +1010,31 @@ function CustomRoomUI({
       <header className="z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <Brand compact href="/dashboard" />
-          <h1 className="font-display truncate text-2xl leading-none tracking-wide">
-            {roomId}
-          </h1>
+          <h1 className="font-display truncate text-2xl leading-none tracking-wide">{roomId}</h1>
         </div>
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <button
             onClick={() => {
-              setShowSidePanel(true);
+              setSidePanelOverride(true);
               setActiveSideTab('members');
             }}
             className="btn btn-ghost min-h-10 gap-2 px-3"
             aria-label="Lista osób w pokoju"
           >
-            <svg className="size-4 text-mute" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
+            <Icon name="users" className="size-4 text-mute" />
             <span>{peopleLabel(participants.length)}</span>
           </button>
 
           <button
             onClick={() => {
-              setShowSidePanel(true);
+              setSidePanelOverride(true);
               setActiveSideTab('stats');
             }}
             className="btn btn-ghost min-h-10 gap-2 px-3 font-mono text-xs"
             aria-label="Statystyki WebRTC"
           >
-            <svg className="size-4 text-lime" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
+            <Icon name="stats" className="size-4 text-lime" />
             <span className="hidden sm:inline">Statystyki</span>
           </button>
 
@@ -1318,13 +1062,19 @@ function CustomRoomUI({
 
       <div className="relative flex flex-1 overflow-hidden">
         <main className="flex flex-1 items-center justify-center overflow-y-auto p-3 sm:p-6">
-          <div className={`grid h-full w-full items-center justify-items-center gap-3 sm:gap-4 ${getGridLayoutClass(cards.length)}`}>
+          <div
+            className={`grid h-full w-full items-center justify-items-center gap-3 sm:gap-4 ${getGridLayoutClass(cards.length)}`}
+          >
             {cards.map(({ cam, screen }) => {
               const participant = cam.participant;
-              const name = participant.name || participant.identity || 'Użytkownik';
+              const name =
+                participant.name ||
+                resolvedUsernames[participant.identity] ||
+                participant.identity ||
+                'Użytkownik';
               const isSpeaking = participant.isSpeaking;
               const camOn = !!cam.publication?.track && !cam.publication.isMuted;
-              const avatarUrl = avatars[participant.identity];
+              const avatarUrl = resolvedAvatars[participant.identity];
 
               return (
                 <div
@@ -1339,10 +1089,7 @@ function CustomRoomUI({
                       className="h-full w-full bg-black object-contain"
                     />
                   ) : camOn ? (
-                    <VideoTrack
-                      trackRef={asRef(cam)}
-                      className="h-full w-full object-cover"
-                    />
+                    <VideoTrack trackRef={asRef(cam)} className="h-full w-full object-cover" />
                   ) : (
                     <ParticipantAvatar
                       name={name}
@@ -1357,10 +1104,7 @@ function CustomRoomUI({
                   {screen && (
                     <div className="absolute bottom-2.5 right-2.5 flex aspect-video w-[26%] min-w-24 max-w-52 items-center justify-center overflow-hidden rounded-md border border-line bg-raised shadow-lg">
                       {camOn ? (
-                        <VideoTrack
-                          trackRef={asRef(cam)}
-                          className="h-full w-full object-cover"
-                        />
+                        <VideoTrack trackRef={asRef(cam)} className="h-full w-full object-cover" />
                       ) : (
                         <ParticipantAvatar
                           name={name}
@@ -1397,32 +1141,37 @@ function CustomRoomUI({
               <div className="flex gap-1 rounded-md bg-raised p-1 text-xs font-semibold">
                 <button
                   onClick={() => setActiveSideTab('chat')}
-                  className={`px-3 py-1.5 rounded transition ${
-                    activeSideTab === 'chat' ? 'bg-panel text-paper shadow-sm' : 'text-mute hover:text-paper'
+                  className={`rounded px-3 py-1.5 transition ${
+                    activeSideTab === 'chat'
+                      ? 'bg-panel text-paper shadow-sm'
+                      : 'text-mute hover:text-paper'
                   }`}
                 >
                   Czat
                 </button>
                 <button
                   onClick={() => setActiveSideTab('members')}
-                  className={`px-3 py-1.5 rounded transition ${
-                    activeSideTab === 'members' ? 'bg-panel text-paper shadow-sm' : 'text-mute hover:text-paper'
+                  className={`rounded px-3 py-1.5 transition ${
+                    activeSideTab === 'members'
+                      ? 'bg-panel text-paper shadow-sm'
+                      : 'text-mute hover:text-paper'
                   }`}
                 >
                   Osoby ({members.length || participants.length})
                 </button>
                 <button
                   onClick={() => setActiveSideTab('stats')}
-                  className={`px-3 py-1.5 rounded transition ${
-                    activeSideTab === 'stats' ? 'bg-panel text-paper shadow-sm' : 'text-mute hover:text-paper'
+                  className={`rounded px-3 py-1.5 transition ${
+                    activeSideTab === 'stats'
+                      ? 'bg-panel text-paper shadow-sm'
+                      : 'text-mute hover:text-paper'
                   }`}
                 >
                   Stats
                 </button>
               </div>
-
               <button
-                onClick={() => setShowSidePanel(false)}
+                onClick={() => setSidePanelOverride(false)}
                 className="btn btn-ghost size-9 min-h-0 px-0 md:hidden"
                 aria-label="Zamknij panel"
               >
@@ -1431,266 +1180,43 @@ function CustomRoomUI({
             </div>
 
             {activeSideTab === 'chat' && (
-              <>
-                <div ref={chatScrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
-                  {messages.length === 0 ? (
-                    <p className="mt-10 text-center text-sm text-mute">
-                      Nikt jeszcze nic nie napisał. Zacznij pierwszy.
-                    </p>
-                  ) : (
-                    messages.map((msg) => {
-                      const mine = msg.sender_id === currentUser?.id;
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}
-                        >
-                          <div className="mb-1 flex items-baseline gap-2 text-xs text-mute">
-                            {!mine && (
-                              <>
-                                <span className="font-semibold text-paper">
-                                  {msg.profiles?.username || 'Użytkownik'}
-                                </span>
-                                {roleById[msg.sender_id] && (
-                                  <RoleBadge role={roleById[msg.sender_id]} compact />
-                                )}
-                              </>
-                            )}
-                            <time dateTime={msg.created_at}>
-                              {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </time>
-                          </div>
-                          <p
-                            className={`max-w-[85%] wrap-break-words rounded-lg px-3 py-2 text-sm leading-relaxed ${
-                              mine ? 'bg-lime text-ink' : 'bg-raised text-paper'
-                            }`}
-                          >
-                            {msg.content}
-                          </p>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <form onSubmit={handleSendMessage} className="flex gap-2 border-t border-line p-3">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    placeholder="Napisz wiadomość..."
-                    aria-label="Treść wiadomości"
-                    className="field"
-                  />
-                  <button
-                    type="submit"
-                    className="btn btn-primary size-11 shrink-0 px-0"
-                    aria-label="Wyślij wiadomość"
-                  >
-                    <Icon name="send" className="size-5" />
-                  </button>
-                </form>
-              </>
+              <ChatPanel
+                messages={messages}
+                currentUserId={currentUser.id}
+                username={username}
+                resolvedUsernames={resolvedUsernames}
+                resolvedAvatars={resolvedAvatars}
+                roleById={roleById}
+                mentionableUsers={mentionableUsers}
+                onSendMessage={handleSendMessage}
+              />
             )}
 
             {activeSideTab === 'members' && (
-              <div className="flex-1 space-y-5 overflow-y-auto p-4">
-                {panelError && (
-                  <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
-                    {panelError}
-                  </div>
-                )}
-                {panelNotice && (
-                  <div role="status" className="rounded-md border border-lime/40 bg-lime/10 p-3 text-sm text-lime">
-                    {panelNotice}
-                  </div>
-                )}
-
-                {myRank >= 2 && (
-                  <form onSubmit={handleAddMember} className="flex gap-2">
-                    <input
-                      type="text"
-                      value={addUsername}
-                      onChange={(e) => setAddUsername(e.target.value)}
-                      placeholder="Dodaj po nazwie użytkownika"
-                      aria-label="Nazwa użytkownika do dodania"
-                      autoComplete="off"
-                      className="field min-h-10"
-                    />
-                    <button
-                      type="submit"
-                      disabled={moderationBusy || !addUsername.trim()}
-                      className="btn btn-primary size-10 min-h-0 shrink-0 px-0"
-                      aria-label="Dodaj użytkownika"
-                    >
-                      <Icon name="plus" className="size-5" />
-                    </button>
-                  </form>
-                )}
-
-                <div>
-                  <h3 className="mb-1 text-xs font-semibold text-mute">
-                    W rozmowie ({onlineMembers.length})
-                  </h3>
-                  <ul className="divide-y divide-line/40">
-                    {onlineMembers.map((m) => renderMember(m, true))}
-                  </ul>
-                </div>
-
-                {offlineMembers.length > 0 && (
-                  <div>
-                    <h3 className="mb-1 text-xs font-semibold text-mute">
-                      Pozostali członkowie ({offlineMembers.length})
-                    </h3>
-                    <ul className="divide-y divide-line/40">
-                      {offlineMembers.map((m) => renderMember(m, false))}
-                    </ul>
-                  </div>
-                )}
-
-                {myRank >= 2 && (
-                  <div>
-                    <h3 className="mb-1 text-xs font-semibold text-mute">Zablokowani ({bans.length})</h3>
-                    {bans.length === 0 ? (
-                      <p className="text-xs text-mute">Nikt nie jest zablokowany.</p>
-                    ) : (
-                      <ul className="divide-y divide-line/40">
-                        {bans.map((b) => (
-                          <li key={b.id} className="flex items-center gap-3 py-2.5">
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-paper">{b.username}</p>
-                              <p className="text-[11px] text-mute">
-                                {fmtDate(b.banned_at)}
-                                {b.banned_by_name ? `, przez ${b.banned_by_name}` : ''}
-                                {b.reason ? `: ${b.reason}` : ''}
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => handleUnban(b)}
-                              disabled={moderationBusy}
-                              className="btn btn-ghost min-h-8 px-2.5 text-xs"
-                            >
-                              Odblokuj
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
-                {myRank >= 2 && logs.length > 0 && (
-                  <div>
-                    <h3 className="mb-1 text-xs font-semibold text-mute">Ostatnie działania moderacji</h3>
-                    <ul className="divide-y divide-line/40">
-                      {logs.map((log) => {
-                        const roleText =
-                          log.action_type === 'role_change'
-                            ? ` (${ROLE_LABEL[normalizeRole(log.reason) ?? 'member']})`
-                            : '';
-                        return (
-                          <li key={log.id} className="py-2">
-                            <p className="text-sm text-paper">
-                              {LOG_LABEL[log.action_type] ?? log.action_type}: {log.target_name}
-                              {roleText}
-                            </p>
-                            <p className="text-[11px] text-mute">
-                              {fmtDateTime(log.created_at)}, {log.moderator_name}
-                              {log.action_type === 'ban' && log.reason ? `, powód: ${log.reason}` : ''}
-                            </p>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </div>
+              <MembersPanel
+                onlineMembers={onlineMembers}
+                offlineMembers={offlineMembers}
+                participants={participants}
+                bans={bans}
+                logs={logs}
+                currentUserId={currentUser.id}
+                myRank={myRank}
+                resolvedAvatars={resolvedAvatars}
+                panelError={panelError}
+                panelNotice={panelNotice}
+                moderationBusy={moderationBusy}
+                addUsername={addUsername}
+                onAddUsernameChange={setAddUsername}
+                onAddMember={handleAddMember}
+                onToggleMod={handleToggleMod}
+                onKick={handleKick}
+                onRemoveMember={handleRemoveMember}
+                onBan={handleBan}
+                onUnban={handleUnban}
+              />
             )}
 
-            {activeSideTab === 'stats' && (
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-xs">
-                <div className="border-b border-line pb-2">
-                  <h3 className="text-sm font-semibold text-paper uppercase tracking-wider">
-                    Parametry połączenia
-                  </h3>
-                  <p className="text-[11px] text-mute font-sans">
-                    Odczyt w czasie rzeczywistym z API WebRTC / LiveKit.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Stan sesji</span>
-                    <span className="text-lime uppercase font-bold">
-                      {webrtcStats.transportState || 'połączono'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Opóźnienie (RTT)</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.rtt !== null ? `${webrtcStats.rtt} ms` : 'b.d.'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Jitter</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.jitter !== null ? `${webrtcStats.jitter} ms` : '0 ms'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Utrata pakietów</span>
-                    <span className={`font-semibold ${webrtcStats.packetLossPercent && webrtcStats.packetLossPercent > 2 ? 'text-danger' : 'text-paper'}`}>
-                      {webrtcStats.packetLossPercent !== null ? `${webrtcStats.packetLossPercent}%` : '0%'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Bitrate Inbound</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.bitrateInbound} kbps
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Bitrate Outbound</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.bitrateOutbound} kbps
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Rozdzielczość wideo</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.resolution || 'Wideo wyłączone'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Liczba klatek (FPS)</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.fps !== null ? `${webrtcStats.fps} FPS` : 'Wideo wyłączone'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Kodek audio</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.audioCodec || 'Wyciszony'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 border-b border-line/40">
-                    <span className="text-mute">Kodek wideo</span>
-                    <span className="text-paper font-semibold">
-                      {webrtcStats.videoCodec || 'Wyłączony'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
+            {activeSideTab === 'stats' && <StatsPanel stats={webrtcStats} />}
           </aside>
         )}
       </div>
@@ -1720,7 +1246,9 @@ function CustomRoomUI({
           <button
             onClick={toggleScreenShare}
             aria-pressed={isScreenSharing}
-            aria-label={isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'}
+            aria-label={
+              isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'
+            }
             title={isScreenSharing ? 'Zakończ udostępnianie ekranu' : 'Udostępnij ekran'}
             className={`flex size-10 items-center justify-center rounded-full transition-colors ${
               isScreenSharing ? 'bg-lime text-ink' : 'text-paper hover:bg-panel'
@@ -1745,7 +1273,7 @@ function CustomRoomUI({
 
         <button
           onClick={() => {
-            setShowSidePanel(!showSidePanel);
+            setSidePanelOverride(!showSidePanel);
             setActiveSideTab('chat');
           }}
           aria-pressed={showSidePanel && activeSideTab === 'chat'}
