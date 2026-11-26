@@ -365,7 +365,38 @@ export default function DashboardPage() {
   };
 
   const handleCopyInvite = async (room: Room) => {
-    const inviteLink = `${window.location.origin}/room/${room.name}`;
+    const { data, error: roomError } = await supabase
+      .from('rooms')
+      .select('access_code')
+      .eq('id', room.id)
+      .maybeSingle();
+
+    if (roomError) {
+      alert(getErrorMessage(roomError, 'Nie udało się utworzyć zaproszenia.'));
+      return;
+    }
+
+    let inviteCode = data?.access_code;
+    if (!inviteCode) {
+      inviteCode = crypto.randomUUID();
+      const { data: updatedRoom, error } = await supabase
+        .from('rooms')
+        .update({ access_code: inviteCode })
+        .eq('id', room.id)
+        .select('id')
+        .maybeSingle();
+
+      if (error) {
+        alert(getErrorMessage(error, 'Nie udało się utworzyć zaproszenia.'));
+        return;
+      }
+      if (!updatedRoom) {
+        alert('Tylko właściciel pokoju może utworzyć nowe zaproszenie.');
+        return;
+      }
+    }
+
+    const inviteLink = `${window.location.origin}/room/${room.name}?invite=${encodeURIComponent(inviteCode)}`;
     try {
       await navigator.clipboard.writeText(inviteLink);
       setCopiedId(room.id);
@@ -683,8 +714,8 @@ export default function DashboardPage() {
                       <button
                         onClick={() => handleCopyInvite(room)}
                         className="btn btn-ghost size-10 min-h-0 px-0"
-                        title="Kopiuj link"
-                        aria-label={`Kopiuj link do pokoju ${room.name}`}
+                        title="Utwórz lub kopiuj zaproszenie"
+                        aria-label={`Utwórz lub kopiuj zaproszenie do pokoju ${room.name}`}
                       >
                         <Icon name={copied ? 'check' : 'link'} className="size-4" />
                       </button>

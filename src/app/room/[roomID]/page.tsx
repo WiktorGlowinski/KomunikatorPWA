@@ -206,7 +206,8 @@ export default function RoomPage() {
         data: { user: authUser },
       } = await supabase.auth.getUser();
       if (!authUser) {
-        router.push('/login');
+        const returnTo = `${window.location.pathname}${window.location.search}`;
+        router.push(`/login?next=${encodeURIComponent(returnTo)}`);
         return;
       }
       setUser(authUser);
@@ -233,7 +234,10 @@ export default function RoomPage() {
       const invite = new URLSearchParams(window.location.search).get('invite');
       if (invite) {
         const message = await joinWithCode(roomId, invite);
-        if (!message) return;
+        if (!message) {
+          router.push('/dashboard');
+          return;
+        }
         setCodeError(message);
       }
 

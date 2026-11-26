@@ -16,34 +16,48 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const getReturnTo = () => {
+    const next = new URLSearchParams(window.location.search).get('next');
+    return next?.startsWith('/') && !next.startsWith('//') && !next.includes('\\')
+      ? next
+      : '/dashboard';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setSuccessMsg('');
     setLoading(true);
 
     try {
       if (isSignUp) {
         const cleanUsername = username.trim() || email.split('@')[0];
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
+            emailRedirectTo: `${window.location.origin}${getReturnTo()}`,
             data: {
               username: cleanUsername,
             },
           },
         });
         if (error) throw error;
-        router.push('/dashboard');
+        if (data.session) {
+          router.push(getReturnTo());
+        } else {
+          setSuccessMsg('Konto utworzone. Potwierdź adres e-mail, a następnie zaloguj się, aby dokończyć dołączanie do zaproszonego pokoju.');
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
-        router.push('/dashboard');
+        router.push(getReturnTo());
       }
     } catch (err: unknown) {
       const msg = getErrorMessage(err, 'Wystąpił błąd podczas autoryzacji.');
@@ -62,6 +76,7 @@ export default function LoginPage() {
   const switchMode = (signUp: boolean) => {
     setIsSignUp(signUp);
     setErrorMsg('');
+    setSuccessMsg('');
   };
 
   return (
@@ -141,6 +156,12 @@ export default function LoginPage() {
               <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
               <span>{errorMsg}</span>
             </div>
+          )}
+
+          {successMsg && (
+            <p role="status" className="mt-6 rounded-md border border-lime/40 bg-lime/10 p-3.5 text-sm text-lime">
+              {successMsg}
+            </p>
           )}
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">

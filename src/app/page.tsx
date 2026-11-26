@@ -17,7 +17,7 @@ const STEPS = [
   },
   {
     title: 'Wyślij link',
-    text: 'Skopiujesz go jednym kliknięciem z panelu albo już z wnętrza pokoju.',
+    text: 'Utwórz zaproszenie w panelu i wyślij je osobom, które chcesz dodać do pokoju.',
   },
   {
     title: 'Rozmawiaj',
@@ -100,9 +100,9 @@ export default function HomePage() {
         <section className="grid items-center gap-14 py-12 sm:py-20 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
           <div>
             <h1 className="font-display text-[clamp(3.75rem,12vw,8.5rem)] leading-[0.88] tracking-wide text-paper">
-              Wklej link.
+              Twój pokój.
               <br />
-              Jesteś w pokoju.
+              Twoje zaproszenia.
             </h1>
 
             <p className="mt-6 max-w-md text-lg leading-relaxed text-mute">
@@ -132,7 +132,7 @@ export default function HomePage() {
                 </button>
               </div>
               <p className="mt-3 text-sm text-mute">
-                Wejdzie każdy zalogowany, kto dostanie link.
+                Do pokoju dołącza się przez zaproszenie. Nowe osoby po założeniu konta zobaczą pokój w panelu.
               </p>
             </form>
           </div>
