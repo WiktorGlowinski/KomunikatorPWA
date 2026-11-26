@@ -847,7 +847,10 @@ function CustomRoomUI({
     });
   };
 
-  const kickFromCall = async (userId: string) => {
+  const roomAdminAction = async (
+    userId: string,
+    action: 'kick' | 'mute_audio' | 'mute_video'
+  ) => {
     try {
       const {
         data: { session },
@@ -858,10 +861,12 @@ function CustomRoomUI({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session?.access_token ?? ''}`,
         },
-        body: JSON.stringify({ room: roomInfo.name, userId }),
+        body: JSON.stringify({ room: roomInfo.name, userId, action }),
       });
     } catch {}
   };
+
+  const kickFromCall = (userId: string) => roomAdminAction(userId, 'kick');
 
   const runModeration = async (action: () => Promise<void>, okText: string) => {
     setPanelError('');
@@ -921,6 +926,26 @@ function CustomRoomUI({
         ? `${m.username} jest teraz moderatorem.`
         : `${m.username} nie jest już moderatorem.`
     );
+  };
+
+  const handleMuteAudio = (m: MemberRow) => {
+    void runModeration(async () => {
+      await roomAdminAction(m.user_id, 'mute_audio');
+      try {
+        await logAction('mute_audio', m.user_id);
+        await loadModeration();
+      } catch {}
+    }, `Wyciszono mikrofon użytkownika ${m.username}.`);
+  };
+
+  const handleMuteVideo = (m: MemberRow) => {
+    void runModeration(async () => {
+      await roomAdminAction(m.user_id, 'mute_video');
+      try {
+        await logAction('mute_video', m.user_id);
+        await loadModeration();
+      } catch {}
+    }, `Wyłączono kamerę użytkownika ${m.username}.`);
   };
 
   const handleKick = (m: MemberRow) => {
@@ -1209,6 +1234,8 @@ function CustomRoomUI({
                 onAddUsernameChange={setAddUsername}
                 onAddMember={handleAddMember}
                 onToggleMod={handleToggleMod}
+                onMuteAudio={handleMuteAudio}
+                onMuteVideo={handleMuteVideo}
                 onKick={handleKick}
                 onRemoveMember={handleRemoveMember}
                 onBan={handleBan}

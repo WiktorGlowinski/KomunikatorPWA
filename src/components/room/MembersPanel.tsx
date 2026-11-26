@@ -20,6 +20,8 @@ const LOG_LABEL: Record<string, string> = {
   unban: 'Zdjęcie blokady',
   remove_member: 'Usunięcie z pokoju',
   role_change: 'Zmiana roli',
+  mute_audio: 'Wyciszenie mikrofonu',
+  mute_video: 'Wyłączenie kamery',
 };
 
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('pl-PL');
@@ -42,6 +44,8 @@ export function MembersPanel({
   onAddUsernameChange,
   onAddMember,
   onToggleMod,
+  onMuteAudio,
+  onMuteVideo,
   onKick,
   onRemoveMember,
   onBan,
@@ -62,6 +66,8 @@ export function MembersPanel({
   onAddUsernameChange: (val: string) => void;
   onAddMember: (e: React.FormEvent) => void;
   onToggleMod: (m: MemberRow) => void;
+  onMuteAudio: (m: MemberRow) => void;
+  onMuteVideo: (m: MemberRow) => void;
   onKick: (m: MemberRow) => void;
   onRemoveMember: (m: MemberRow) => void;
   onBan: (m: MemberRow) => void;
@@ -110,6 +116,24 @@ export function MembersPanel({
                 className="btn btn-ghost min-h-8 px-2.5 text-xs"
               >
                 {m.role === 'moderator' ? 'Odbierz moderatora' : 'Mianuj moderatorem'}
+              </button>
+            )}
+            {canModerate && online && p?.isMicrophoneEnabled && (
+              <button
+                onClick={() => onMuteAudio(m)}
+                disabled={moderationBusy}
+                className="btn btn-ghost min-h-8 px-2.5 text-xs"
+              >
+                Wycisz mikrofon
+              </button>
+            )}
+            {canModerate && online && p?.isCameraEnabled && (
+              <button
+                onClick={() => onMuteVideo(m)}
+                disabled={moderationBusy}
+                className="btn btn-ghost min-h-8 px-2.5 text-xs"
+              >
+                Wyłącz kamerę
               </button>
             )}
             {canModerate && online && (

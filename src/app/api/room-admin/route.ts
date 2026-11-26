@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { RoomServiceClient } from 'livekit-server-sdk';
+import { RoomServiceClient, TrackSource, TrackType } from 'livekit-server-sdk';
 import { createClient } from '@supabase/supabase-js';
+
+type AdminAction = 'kick' | 'mute_audio' | 'mute_video';
 
 const rank = (role?: string | null) =>
   role === 'owner' || role === 'admin' ? 3 : role === 'moderator' ? 2 : role === 'member' ? 1 : 0;
@@ -12,7 +14,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Brak sesji.' }, { status: 401 });
   }
 
-  let body: { room?: string; userId?: string };
+  let body: { room?: string; userId?: string; action?: AdminAction };
   try {
     body = await req.json();
   } catch {
@@ -20,6 +22,8 @@ export async function POST(req: NextRequest) {
   }
   const roomName = body.room?.trim();
   const targetId = body.userId;
+  const action: AdminAction = body.action ?? 'kick';
+
   if (!roomName || !targetId) {
     return NextResponse.json({ error: 'Brak pokoju lub użytkownika.' }, { status: 400 });
   }
@@ -38,7 +42,10 @@ export async function POST(req: NextRequest) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: { user }, error: authError } = await supabase.auth.getUser(accessToken);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser(accessToken);
   if (authError || !user) {
     return NextResponse.json({ error: 'Sesja wygasła.' }, { status: 401 });
   }
@@ -54,9 +61,29 @@ export async function POST(req: NextRequest) {
   }
 
   const host = livekitUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+  const roomService = new RoomServiceClient(host, apiKey, apiSecret);
+
   try {
-    await new RoomServiceClient(host, apiKey, apiSecret).removeParticipant(info.name, targetId);
+    if (action === 'kick') {
+      await roomService.removeParticipant(info.name, targetId);
+    } else {
+      const participant = await roomService.getParticipant(info.name, targetId);
+      const targetTracks = participant.tracks.filter((track) => {
+        if (track.muted) return false;
+        if (action === 'mute_audio') {
+          return track.source === TrackSource.MICROPHONE || track.type === TrackType.AUDIO;
+        }
+        return track.source === TrackSource.CAMERA;
+      });
+
+      await Promise.all(
+        targetTracks.map((track) =>
+          roomService.mutePublishedTrack(info.name, targetId, track.sid, true)
+        )
+      );
+    }
   } catch {
   }
+
   return NextResponse.json({ ok: true });
 }
